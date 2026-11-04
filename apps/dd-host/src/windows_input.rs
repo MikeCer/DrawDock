@@ -209,6 +209,15 @@ pub struct WindowsInput {
 }
 
 impl WindowsInput {
+    pub fn select_output(&mut self, output: OutputBounds) -> Result<(), String> {
+        if output.width <= 0 || output.height <= 0 {
+            return Err("selected output has invalid pointer geometry".into());
+        }
+        self.release_all()?;
+        self.output = output;
+        Ok(())
+    }
+
     pub fn new(output: OutputBounds) -> Result<Self, String> {
         if output.width <= 0 || output.height <= 0 {
             return Err("selected output has invalid pointer geometry".into());

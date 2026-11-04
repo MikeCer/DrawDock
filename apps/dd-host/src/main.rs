@@ -3,6 +3,9 @@ compile_error!("dd-host currently implements only the native Windows presenter")
 
 mod pairing_window;
 mod session;
+mod source;
+mod trust;
+mod video;
 mod windows_input;
 mod windows_overlay;
 
@@ -10,7 +13,7 @@ use dd_scene::{Scene, SceneFixture};
 use serde_json::json;
 use std::{
     env, fs,
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     path::PathBuf,
     process::ExitCode,
     str::FromStr,
@@ -30,6 +33,7 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Vec<String>) -> Result<(), String> {
+    windows_overlay::initialize_dpi()?;
     match args.first().map(String::as_str) {
         Some("outputs") => {
             for output in Output::enumerate()? {
@@ -67,6 +71,9 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             Ok(())
         }
+        Some("video-probe") => {
+            video::probe(selected_output(&args)?, 60, selected_video_encoder(&args)?)
+        }
         Some("overlay-demo") => {
             let output = selected_output(&args)?;
             println!(
@@ -83,20 +90,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let listen = selected_listen_address(&args)?;
             let port = selected_port(&args)?;
             let pairing_info = selected_pairing_info(&args)?;
+            let allow_pairing = args.iter().any(|arg| arg == "--pair");
+            let encoder = selected_video_encoder(&args)?;
+            let trust = trust::TrustStore::open_default()?;
             let scene = Arc::new(Mutex::new(Scene::default()));
+            let source = Arc::new(Mutex::new(source::SelectedSource::new(output.clone())));
+            let server_source = Arc::clone(&source);
             let server_scene = Arc::clone(&scene);
-            let bounds = windows_input::OutputBounds {
-                left: output.left,
-                top: output.top,
-                width: output.width(),
-                height: output.height(),
-            };
             thread::Builder::new()
                 .name("drawdock-tls-session".into())
                 .spawn(move || {
-                    if let Err(error) =
-                        session::run_server(listen, port, server_scene, bounds, pairing_info)
-                    {
+                    if let Err(error) = session::run_server(
+                        SocketAddr::new(listen, port),
+                        server_scene,
+                        server_source,
+                        pairing_info,
+                        allow_pairing,
+                        trust,
+                        encoder,
+                    ) {
                         eprintln!("DrawDock session stopped: {error}");
                     }
                 })
@@ -105,7 +117,26 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 "Starting host overlay on {}; Ctrl+C removes the overlay and stops this process.",
                 output.name
             );
-            windows_overlay::run(output, scene)
+            windows_overlay::run_selected(output, scene, Some(source))
+        }
+        Some("devices") => {
+            let mut trust = trust::TrustStore::open_default()?;
+            match args.get(1).map(String::as_str) {
+                Some("list") if args.len() == 2 => {
+                    if trust.devices().is_empty() {
+                        println!("No remembered devices.");
+                    }
+                    for device in trust.devices() {
+                        println!("{}  {}", device.id, device.name);
+                    }
+                }
+                Some("revoke") if args.len() == 3 => {
+                    trust.revoke(&args[2])?;
+                    println!("Device revoked. Its saved credential will no longer reconnect.");
+                }
+                _ => return Err("use `dd-host devices list` or `dd-host devices revoke <id>`; stop the host first".into()),
+            }
+            Ok(())
         }
         Some("replay") => {
             let path = args.get(1).ok_or("replay requires a fixture path")?;
@@ -129,12 +160,25 @@ fn run(args: Vec<String>) -> Result<(), String> {
                  Usage:\n\
                    dd-host outputs\n\
                    dd-host doctor [--output reports\\doctor.json]\n\
+                   dd-host video-probe --output \\\\.\\DISPLAY2 [--video-encoder software|nvenc]\n\
                    dd-host overlay-demo --output \\\\.\\DISPLAY2\n\
                    dd-host replay tests\\fixtures\\basic-scene.json --output \\\\.\\DISPLAY2\n\
-                   dd-host serve --output \\\\.\\DISPLAY2 [--listen 127.0.0.1] [--port 47831] [--pairing-info <path>]"
+                   dd-host serve --output \\\\.\\DISPLAY2 [--listen 127.0.0.1] [--port 47831] [--pair] [--pairing-info <path>] [--video-encoder software|nvenc]\n\
+                   dd-host devices list\n\
+                   dd-host devices revoke <id>"
             );
             Ok(())
         }
+    }
+}
+
+fn selected_video_encoder(args: &[String]) -> Result<video::VideoEncoder, String> {
+    match args.iter().position(|arg| arg == "--video-encoder") {
+        Some(index) => video::VideoEncoder::parse(
+            args.get(index + 1)
+                .ok_or("--video-encoder requires software or nvenc")?,
+        ),
+        None => Ok(video::VideoEncoder::Software),
     }
 }
 
@@ -192,6 +236,15 @@ fn selected_output(args: &[String]) -> Result<Output, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_or_missing_encoder_choice_is_rejected() {
+        assert!(selected_video_encoder(&["serve".into(), "--video-encoder".into()]).is_err());
+        assert!(
+            selected_video_encoder(&["serve".into(), "--video-encoder".into(), "unknown".into()])
+                .is_err()
+        );
+    }
 
     #[test]
     fn pairing_info_output_is_opt_in_and_requires_a_path() {

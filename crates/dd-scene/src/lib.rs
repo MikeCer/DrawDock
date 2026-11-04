@@ -154,6 +154,13 @@ impl Scene {
         Ok(())
     }
 
+    pub fn reset_session(&mut self) {
+        self.objects.clear();
+        self.undo.clear();
+        self.redo.clear();
+        self.changed();
+    }
+
     pub fn undo(&mut self) -> bool {
         let Some(previous) = self.undo.pop() else {
             return false;
@@ -299,6 +306,20 @@ mod tests {
         assert!(scene.objects().is_empty());
         assert!(scene.undo());
         assert_eq!(scene.objects().len(), 2);
+    }
+
+    #[test]
+    fn session_reset_discards_previous_ink_and_history() {
+        let mut scene = Scene::default();
+        scene.commit(stroke(1, 0.2)).unwrap();
+        scene.commit(stroke(2, 0.4)).unwrap();
+        assert!(scene.undo());
+        let revision = scene.revision();
+        scene.reset_session();
+        assert!(scene.objects().is_empty());
+        assert!(!scene.undo());
+        assert!(!scene.redo());
+        assert!(scene.revision() > revision);
     }
 
     #[test]

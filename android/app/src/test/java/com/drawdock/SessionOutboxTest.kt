@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SessionOutboxTest {
+    @Test
+    fun sourceEpochChangePreventsCoalescingOldAndNewGeometry() {
+        val outbox = SessionOutbox()
+        val old = pointer("hover").copy(sourceEpoch = 1)
+        val new = pointer("hover").copy(sourceEpoch = 2)
+        assertTrue(outbox.offer(old))
+        assertTrue(outbox.offer(new))
+        assertEquals(old, outbox.poll(0))
+        assertEquals(new, outbox.poll(0))
+    }
+
     private fun pointer(action: String, x: Float = 0f, generation: Long = 1) =
         SessionCommand.Pointer(action, generation, x, 20f, "left", 100, 100)
 

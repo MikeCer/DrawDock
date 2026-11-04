@@ -25,14 +25,12 @@ visible”; the process was stopped afterward. This is not pixel-level proof tha
 ink appeared over the physical display or a live application.
 
 The Android client compiles and its unit tests pass. The built APK was installed
-to the selected tablet after explicit user approval. For the current manual USB
-test, the host is running on `\\.\DISPLAY2` with a loopback-only listener at
-`127.0.0.1:47831`, and one ADB reverse mapping is active. Pairing, host-visible
-pen input and physical stylus gestures are not yet confirmed. The client
-supports a no-video tablet preview and annotation/control protocol. Windows
-pointer injection is implemented but not exercised. Selected-monitor
-capture/H.264, video transport, reconciliation and Wi-Fi acceptance are not
-implemented/tested. No firewall rule was changed.
+to the selected tablet after explicit user approval. The earlier W2 manual USB
+setup used `\\.\DISPLAY2`, a loopback-only listener at `127.0.0.1:47831` and an
+ADB reverse mapping. That stage provided no-video preview and annotation/control.
+Later session evidence and the initial W3 video implementation are recorded
+below; physical stylus/fullscreen and Wi-Fi acceptance remain outstanding.
+No firewall rule was changed.
 
 Pairing UX now uses a native Windows QR invitation and a native Yes/No device
 approval prompt. The tablet has a bundled camera scanner; manual entry remains
@@ -57,18 +55,130 @@ cover 2,000 samples/s, ordered transitions/mode barriers, the reserved release
 slot, and no catch-up burst after a stall. All 11 Android tests, debug build and
 lint pass. Sustained physical pen/pointer stability still requires manual retest.
 
+The initial W3 implementation now has a top Android monitor selector, collapsible
+overlay tools and an aspect-fit video/ink workspace. A Rust-controlled installed
+native FFmpeg gdigrab/libx264 process captures the selected monitor and supplies
+baseline H.264 over a separate pinned-TLS connection, authenticated with a
+post-approval video credential. The same port/ADB mapping is reused. Source
+changes release buttons, switch the native overlay, preserve per-monitor scene
+history, restart the encoder and reject old epochs until new video is rendered.
+DPI awareness is now established before enumeration; the two non-primary outputs
+enumerate at 3840x2160 rather than the earlier DPI-virtualized 2560x1440.
+
+Validation: 20 ordinary Rust tests and 14 Android tests pass; Android build/lint
+and Rust clippy/build complete (only pre-existing clippy warnings). The real
+60-frame H.264 capture probe passed, and the explicit native TLS test rejected a
+wrong video token, streamed actual frames and switched between two real monitors.
+No screen recording was saved. Android playback, physical multi-monitor pen
+alignment and fullscreen behavior remain unverified. The INCLUDED ink handoff
+currently removes provisional ink on lift rather than waiting for a conservative
+capture revision watermark: reconciliation remains **BLOCKED**. This may produce
+a short ink gap; it is not acceptance of the final visual contract. The external
+GPL-enabled FFmpeg dependency is not bundled, and hardware encoding, DXGI capture,
+video recovery/latency/soak metrics and Wi-Fi acceptance remain future work.
+
+The video-enabled APK was installed successfully to the authorized tablet and
+its process started without a new app crash. The tablet screen was off, so no
+visible video/UX acceptance is claimed. Historical tablet crash logs also exposed
+TLS `close_notify` being written on the UI thread during Disconnect; socket
+shutdown now runs on a worker, including Surface/lifecycle-triggered disconnects.
+
 See `capability-matrix.md` for per-gate status. No PASS is claimed for physical
 overlay, pen-to-host ink, fullscreen, pointer injection or Wi-Fi.
 
 ## Next required acceptance work
+
+Remembered-device persistence is now implemented at the owner's request,
+superseding the original in-memory-only scope. The native host retains its
+DPAPI-protected certificate/private key and registry, issues independent
+256-bit per-device credentials after approval, stores only their digests, and
+continues accepting remembered tablets after a session ends. Android retains
+the last PC's pinned endpoint/credential using AES-GCM with an Android Keystore
+key. New enrollment still needs QR + local approval; revocation and explicit
+re-pairing/forgetting are documented in the run guides.
+
+23 Rust unit tests, 2 explicit native integration tests and 16 Android tests pass.
+The actual native host regression used an isolated DPAPI registry and verified
+repeated pinned-TLS reconnects, process restart with the same certificate,
+fresh video credentials and wrong/revoked credential rejection. It also exposed
+a Windows listener-clone shutdown stall; the video listener now explicitly
+enables nonblocking mode so disconnect cleanup can finish and accept reconnects.
+Session cleanup now discards the old scene's undo/redo history as well as visible
+ink, so another session cannot resurrect a previous tablet's annotations.
+Android encryption-envelope tamper/format tests, build and lint pass. First
+tablet enrollment/Keystore reconnect still needs one owner-approved pairing
+with the upgraded app/host. The broader physical mirroring/reconciliation and
+fullscreen gates remain unchanged, not passed by these authentication tests.
 
 1. Verify the fixture visually over an updating application, click-through and
    focus, then over an actual fullscreen presentation; record physical output
    and DPI behavior.
 2. With tablet Wi-Fi disabled, approve the pending loopback pairing locally,
    then demonstrate real pen-created host-visible marks plus cancellation/history.
-3. After W2 passes, complete pointer and selected-monitor capture/video,
-   reconciliation and source-switch recovery, then test private-interface
+3. Validate pointer, selected-monitor video and source alignment on the tablet;
+   complete reconciliation watermarks and recovery, then test private-interface
    Wi-Fi with no automatic firewall changes.
+
+## Video quality and rusty_ffmpeg evaluation
+
+The owner's video-quality request was evaluated against the installed static
+FFmpeg 7.0 executable, Intel i9-11900K, RTX 3080 Ti, and tablet vendor AVC limits
+(up to 4096x2176 advertised). `rusty_ffmpeg` is raw FFI/linking to the same FFmpeg
+libraries, not a higher-quality encoder. Equivalent codecs/settings do not gain
+image quality merely by replacing the subprocess. The current pipe carries
+already-compressed H.264, not full raw desktop frames. In-process APIs could
+support finer timestamps, buffer control or future GPU-frame integration, but
+would require implementing those paths, not just substituting the crate.
+
+Upstream Windows instructions require vcpkg or compatible FFmpeg libraries,
+import libraries/headers and Clang or pregenerated bindings. This installation
+contains executables only, not a development SDK; no new SDK, library, driver or
+system-wide tool was installed. Context7 could not run because Node was absent
+from PATH, so the crate's canonical published README was consulted directly.
+Retaining the executable also preserves encoder-process fault isolation and
+avoids adding unsafe media FFI to the presenter/session process.
+
+Instead, the actual bottlenecks were improved: 1280x720/fast-bilinear/ultrafast
+became up to 2560x1440/Lanczos with BT.709 signaling and H.264 High level 5.0.
+The launcher explicitly selects tested NVENC P5/ultra-low-latency, CQ 18,
+12 Mbit/s VBR target, 24 Mbit/s maximum and 2-Mbit VBV; software veryfast/CRF 18
+is explicitly selectable and remains the raw CLI default. Both have no
+B-frames/lookahead. There is no silent encoder fallback. GDI capture and scaling
+still use CPU memory; this is not a zero-copy GPU pipeline or HDR validation.
+
+A reproducible synthetic 2560x1440 desktop chart (Consolas text at 12-36 pixels
+and one-pixel grid lines) was encoded for 90 frames/profile and decoded/upscaled
+back to the same reference for SSIM. Results compare entire profiles, not codecs
+at equal bitrate or the Rust/CLI integration boundary:
+
+| Profile | SSIM (higher is better) | Static chart average Mbit/s | Synthetic motion encode fps including startup |
+|---|---:|---:|---:|
+| Previous 720p x264 ultrafast | 0.798078 | 2.897 | 385.1 |
+| New 1440p x264 veryfast | 0.994318 | 7.568 | 81.0 |
+| New 1440p NVENC P5 | 0.998846 | 5.825 | 50.6 |
+
+Motion throughput used 90 `testsrc2` frames without real-time pacing; it is not
+capture latency, glass-to-glass latency, a sustained FPS guarantee or proof that
+NVENC is always faster than software. Native live primary-monitor probes each
+captured 60 AUs at 2560x1440 in 2.12 seconds including startup, with both encoders.
+No actual desktop recording was saved. The synthetic chart/encoded files were
+removed; the session contains `Measure-DrawDockVideoQuality.ps1` and its JSON
+results for repeatability.
+
+Initial hardware capture exposed a brittle one-slot `try_send`: multiple
+complete AUs from a single pipe read could fail before an idle consumer got CPU.
+The queue remains one slot, but handoff now waits at most 100 ms and is
+cancellable. It never silently drops reference frames; sustained stalls still
+require reconnecting. Regression covers burst order, stall deadline and stop.
+Actual pinned-TLS tests passed both encoders on two monitors, including
+SPS/PPS/IDR startup and invalid video-token rejection. 26 Rust unit tests and
+2 explicit native integration tests pass; Android has 18 passing tests with
+build/lint passing. Physical tablet visual quality, color accuracy, video/ink
+reconciliation, fullscreen, Wi-Fi and sustained thermal/latency tests remain
+**PARTIAL/BLOCKED**, not promoted to PASS by these results.
+
+References:
+- https://docs.rs/crate/rusty_ffmpeg/latest
+- https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/ffmpeg-with-nvidia-gpu/index.html
 
 Linux/GNOME and QUIC are **DEFERRED**.

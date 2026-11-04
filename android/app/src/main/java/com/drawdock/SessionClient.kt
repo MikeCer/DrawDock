@@ -4,6 +4,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Surface
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -31,14 +32,27 @@ class SessionClient(
     private val onStatus: (String, Boolean) -> Unit,
     private val onModeAck: (String, Long) -> Unit,
     private val onClearAck: (Long) -> Unit,
+    private val videoSurface: Surface,
+    private val onSources: (JSONArray, JSONObject) -> Unit,
+    private val onSourceSelected: (JSONObject, Long) -> Unit,
+    private val onSourceReady: (Long) -> Unit,
+    private val onVideoGeometry: (Long, Int, Int) -> Unit,
+    private val onVideoRendered: (Long) -> Unit,
+    private val onVideoError: (String) -> Unit,
+    private val rememberedDeviceId: String?,
+    private val onRemembered: (String, String) -> Unit,
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val closed = AtomicBoolean(false)
+    private val credentialLock = Any()
     private val commands = SessionOutbox()
     private val queuedBytes = AtomicLong(0)
     private val nextObjectId = AtomicLong(SystemClock.elapsedRealtimeNanos())
     private val nextModeRequestId = AtomicLong(0)
     private val nextClearRequestId = AtomicLong(0)
+    private val nextSourceRequestId = AtomicLong(0)
+    @Volatile private var sourceEpoch = 0L
+    @Volatile private var videoSocket: SSLSocket? = null
     private val pointerLock = Any()
     private var pointerGeneration = 0L
     private var activePointerGeneration: Long? = null
@@ -68,22 +82,66 @@ class SessionClient(
                 writeFrame(
                     streamOut,
                     JSONObject()
-                        .put("type", "pair")
+                        .put("type", if (rememberedDeviceId == null) "pair" else "resume")
+                        .put("device_id", rememberedDeviceId)
                         .put("token", invitationToken)
                         .put("client", Build.MODEL.take(64)),
                 )
                 connection.soTimeout = 300_000
                 val response = readFrame(streamIn)
                 if (response.optString("type") != "paired") {
-                    throw SecurityException("Host did not approve this tablet session")
+                    throw SecurityException(response.optString("message", "Host did not approve this tablet session"))
+                }
+                require(response.optInt("version") == 2) {
+                    "Host protocol is incompatible; rebuild and restart the host"
+                }
+                synchronized(credentialLock) {
+                    if (closed.get()) return@thread
+                    val credential = response.optJSONObject("remembered_device")
+                    check(rememberedDeviceId != null || credential != null) {
+                        "PC host does not support remembered devices; rebuild and restart it"
+                    }
+                    credential?.let {
+                        onRemembered(credential.getString("id"), credential.getString("token"))
+                    }
                 }
 
                 connection.soTimeout = 0
+                val sources = response.getJSONArray("sources")
+                val selected = response.getJSONObject("selected")
+                sourceEpoch = selected.getLong("source_epoch")
+                mainHandler.post { onSources(sources, selected) }
                 output = streamOut
                 postStatus("Connected (TLS certificate pinned)", true)
                 thread(name = "drawdock-session-writer", isDaemon = true) { writeLoop() }
                 thread(name = "drawdock-session-reader", isDaemon = true) {
                     readLoop(streamIn)
+                }
+                val videoToken = response.getString("video_token")
+                thread(name = "drawdock-video-reader", isDaemon = true) {
+                    try {
+                        val video = context.socketFactory.createSocket() as SSLSocket
+                        videoSocket = video
+                        if (closed.get()) { video.close(); return@thread }
+                        video.connect(InetSocketAddress(host, port), 5_000)
+                        video.soTimeout = 5_000
+                        video.startHandshake()
+                        val videoOut = BufferedOutputStream(video.outputStream)
+                        writeFrame(videoOut, JSONObject().put("type", "video").put("token", videoToken))
+                        RemoteVideoDecoder(
+                            videoSurface,
+                            { epoch, width, height -> mainHandler.post { onVideoGeometry(epoch, width, height) } },
+                            onVideoRendered,
+                        ).run(BufferedInputStream(video.inputStream))
+                    } catch (error: Exception) {
+                        if (!closed.get()) mainHandler.post {
+                            onVideoError(error.message ?: "Video connection ended")
+                        }
+                    } finally {
+                        try { videoSocket?.close() } catch (_: IOException) {
+                            // The decoder/transport error is already surfaced above.
+                        }
+                    }
                 }
             } catch (error: Exception) {
                 close()
@@ -103,7 +161,7 @@ class SessionClient(
             }
             if (queuedBytes.compareAndSet(current, current + reserved)) break
         }
-        val command = SessionCommand.Commit(mark, viewportWidth, viewportHeight, reserved)
+        val command = SessionCommand.Commit(mark, viewportWidth, viewportHeight, reserved, sourceEpoch)
         if (!enqueue(command)) {
             queuedBytes.addAndGet(-reserved)
             return false
@@ -111,12 +169,17 @@ class SessionClient(
         return true
     }
 
-    fun undo() = enqueue(SessionCommand.Control("undo"))
-    fun redo() = enqueue(SessionCommand.Control("redo"))
+    fun undo() = enqueue(SessionCommand.Control("undo", sourceEpoch))
+    fun redo() = enqueue(SessionCommand.Control("redo", sourceEpoch))
+    fun sourceReady(epoch: Long) = enqueue(SessionCommand.Control("source_ready", epoch))
+    fun selectSource(name: String): Long? {
+        val requestId = nextSourceRequestId.incrementAndGet()
+        return requestId.takeIf { enqueue(SessionCommand.SelectSource(name, requestId, sourceEpoch)) }
+    }
     fun clearDisplay(): Long? {
         val requestId = nextClearRequestId.incrementAndGet()
         return requestId.takeIf {
-            enqueue(SessionCommand.ClearDisplay(requestId))
+            enqueue(SessionCommand.ClearDisplay(requestId, sourceEpoch))
         }
     }
 
@@ -124,7 +187,7 @@ class SessionClient(
         if (mode != "draw" && mode != "pointer") return null
         val requestId = nextModeRequestId.incrementAndGet()
         return requestId.takeIf {
-            enqueue(SessionCommand.Mode(mode, requestId))
+            enqueue(SessionCommand.Mode(mode, requestId, sourceEpoch))
         }
     }
 
@@ -152,6 +215,7 @@ class SessionClient(
                 event.button,
                 viewportWidth,
                 viewportHeight,
+                sourceEpoch,
             )
             if (!enqueue(command)) return false
             when (event.action) {
@@ -191,6 +255,7 @@ class SessionClient(
                 } else {
                     try {
                         for (message in encodeCommand(command)) {
+                            message.put("source_epoch", command.sourceEpoch)
                             if (!writeSessionFrame(stream, message)) return
                         }
                     } finally {
@@ -245,6 +310,16 @@ class SessionClient(
                         val requestId = response.optLong("request_id", -1)
                         if (requestId > 0) mainHandler.post { onClearAck(requestId) }
                     }
+                    "source_selected" -> {
+                        val selected = response.getJSONObject("selected")
+                        sourceEpoch = selected.getLong("source_epoch")
+                        val requestId = response.getLong("request_id")
+                        mainHandler.post { onSourceSelected(selected, requestId) }
+                    }
+                    "source_ready_ack" -> {
+                        val epoch = response.getLong("source_epoch")
+                        mainHandler.post { onSourceReady(epoch) }
+                    }
                 }
             }
         } catch (error: Exception) {
@@ -256,16 +331,23 @@ class SessionClient(
     }
 
     private fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        try {
-            socket?.close()
-        } catch (_: IOException) {
-            // Closing a failed TLS socket is best-effort; the original failure is reported.
-        }
+        if (!synchronized(credentialLock) { closed.compareAndSet(false, true) }) return
+        val connections = listOfNotNull(socket, videoSocket)
         socket = null
+        videoSocket = null
         output = null
         commands.clear()
         queuedBytes.set(0)
+        // TLS close can write close_notify; lifecycle callbacks must not do network I/O.
+        thread(name = "drawdock-session-close", isDaemon = true) {
+            for (connection in connections) {
+                try {
+                    connection.close()
+                } catch (_: IOException) {
+                    // Closing a failed socket is best-effort; the original failure is reported.
+                }
+            }
+        }
     }
 
     private fun postStatus(message: String, connected: Boolean) {
@@ -282,6 +364,10 @@ class SessionClient(
 
     private fun encodeCommand(command: SessionCommand): List<JSONObject> = when (command) {
         is SessionCommand.Control -> listOf(JSONObject().put("type", command.type))
+        is SessionCommand.SelectSource -> listOf(
+            JSONObject().put("type", "select_source").put("source", command.source)
+                .put("request_id", command.requestId),
+        )
         is SessionCommand.Mode -> listOf(
             JSONObject()
                 .put("type", "set_mode")

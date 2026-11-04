@@ -1,22 +1,26 @@
 use crate::{
     pairing_window::{self, PairingWindow},
+    source::SharedSource,
+    trust::TrustStore,
+    video::{VideoEncoder, VideoService},
     windows_input::{Mode, OutputBounds, WindowsInput},
+    windows_overlay::Output,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use dd_scene::{InkObject, Scene};
-use rcgen::generate_simple_self_signed;
-use rustls::{
-    ServerConfig, ServerConnection, StreamOwned,
-    pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer},
-};
+use rustls::{ServerConnection, StreamOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Write},
     net::{IpAddr, SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -39,24 +43,24 @@ struct CommitTransaction {
 }
 
 pub fn run_server(
-    address: IpAddr,
-    port: u16,
+    endpoint: SocketAddr,
     scene: Arc<Mutex<Scene>>,
-    output: OutputBounds,
+    source: SharedSource,
     pairing_info: Option<PathBuf>,
+    allow_pairing: bool,
+    mut trust: TrustStore,
+    encoder: VideoEncoder,
 ) -> Result<(), String> {
+    let address = endpoint.ip();
+    let port = endpoint.port();
     if !is_allowed_bind(address) {
         return Err(format!(
             "refusing non-loopback, non-private listener address {address}"
         ));
     }
 
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .map_err(|_| "a Rustls crypto provider is already installed".to_owned())?;
-    let certified = generate_simple_self_signed(vec!["drawdock".to_owned()])
-        .map_err(|error| format!("create temporary host TLS identity: {error}"))?;
-    let fingerprint = hex(&Sha256::digest(certified.cert.der().as_ref()));
+    let fingerprint = trust.fingerprint();
+    let enroll = allow_pairing || pairing_info.is_some() || trust.devices().is_empty();
     let mut token_bytes = [0u8; 16];
     getrandom::fill(&mut token_bytes)
         .map_err(|error| format!("generate invitation token: {error}"))?;
@@ -78,14 +82,7 @@ pub fn run_server(
             .map_err(|error| format!("write one-time pairing info {}: {error}", path.display()))?;
         println!("One-time pairing info written to {}.", path.display());
     }
-    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(certified.key_pair.serialize_der()));
-    let config = Arc::new(
-        ServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(vec![certified.cert.der().clone()], key)
-            .map_err(|error| format!("configure host TLS identity: {error}"))?,
-    );
-    let mut input = WindowsInput::new(output)?;
+    let config = Arc::new(trust.tls_config()?);
     let listener = TcpListener::bind(SocketAddr::new(address, port))
         .map_err(|error| format!("bind TLS listener {address}:{port}: {error}"))?;
     listener
@@ -94,10 +91,23 @@ pub fn run_server(
 
     let expires = Instant::now() + TOKEN_LIFETIME;
     let invitation = invitation_uri(address, port, &fingerprint, &token);
-    let pairing = PairingWindow::open(&invitation, &format!("{address}:{port}"), TOKEN_LIFETIME)?;
+    let mut pairing = if enroll {
+        Some(PairingWindow::open(
+            &invitation,
+            &format!("{address}:{port}"),
+            TOKEN_LIFETIME,
+        )?)
+    } else {
+        None
+    };
     println!("Authenticated TLS/TCP listener: {address}:{port}");
-    println!("Scan the QR invitation with DrawDock, then approve your tablet in the PC dialog.");
-    println!("Invitation expires in 5 minutes. Closing the QR window cancels pairing.");
+    println!("Remembered tablets can reconnect without scanning or another approval.");
+    if enroll {
+        println!("For a new tablet, scan the QR and approve remembering it in the PC dialog.");
+        println!("Invitation expires in 5 minutes; closing it cancels new enrollment only.");
+    } else {
+        println!("To enroll a new tablet, restart with --pair (launcher: -Restart -Pair).");
+    }
     if !address.is_loopback() {
         println!(
             "WARNING: listening on the explicitly selected private interface. \
@@ -105,7 +115,23 @@ pub fn run_server(
         );
     }
     let mut attempts = 0;
-    while Instant::now() < expires && attempts < MAX_AUTH_ATTEMPTS && pairing.is_open() {
+    let mut auth_window = Instant::now();
+    let mut auth_failures = 0;
+    loop {
+        if pairing.as_ref().is_some_and(|window| {
+            !window.is_open() || Instant::now() >= expires || attempts >= MAX_AUTH_ATTEMPTS
+        }) {
+            drop(pairing.take());
+            println!("New-device invitation closed; remembered devices may still reconnect.");
+        }
+        if auth_window.elapsed() >= Duration::from_secs(10) {
+            auth_window = Instant::now();
+            auth_failures = 0;
+        }
+        if auth_failures >= MAX_AUTH_ATTEMPTS {
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
         let (tcp, peer) = match listener.accept() {
             Ok(connection) => connection,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -118,7 +144,7 @@ pub fn run_server(
             .map_err(|error| format!("configure accepted connection from {peer}: {error}"))?;
         tcp.set_nodelay(true)
             .map_err(|error| format!("set TCP_NODELAY for {peer}: {error}"))?;
-        tcp.set_read_timeout(Some(Duration::from_secs(30)))
+        tcp.set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|error| format!("set pairing read timeout: {error}"))?;
         tcp.set_write_timeout(Some(Duration::from_secs(30)))
             .map_err(|error| format!("set pairing write timeout: {error}"))?;
@@ -126,6 +152,7 @@ pub fn run_server(
             Ok(connection) => StreamOwned::new(connection, tcp),
             Err(error) => {
                 attempts += 1;
+                auth_failures += 1;
                 eprintln!("Rejected TLS session from {peer}: {error}");
                 continue;
             }
@@ -135,56 +162,137 @@ pub fn run_server(
             Ok(message) => message,
             Err(error) => {
                 attempts += 1;
+                auth_failures += 1;
                 eprintln!("Rejected invalid pairing request from {peer}: {error}");
                 continue;
             }
         };
-        if !valid_invitation(&invitation, &token, expires) {
+        let resumed = invitation["type"] == "resume";
+        let remembered = if resumed {
+            trust.authenticate(
+                invitation["device_id"].as_str().unwrap_or(""),
+                invitation["token"].as_str().unwrap_or(""),
+            )
+        } else {
+            None
+        };
+        let new_pairing = !resumed
+            && pairing.as_ref().is_some_and(PairingWindow::is_open)
+            && valid_invitation(&invitation, &token, expires);
+        if remembered.is_none() && !new_pairing {
             attempts += 1;
+            auth_failures += 1;
             eprintln!("Rejected unauthorized pairing request from {peer}");
+            if let Err(error) = write_json_line(
+                reader.get_mut(),
+                &json!({
+                    "type": "authentication_failed",
+                    "message": "Credential not recognized or invitation closed; pair again using a new QR."
+                }),
+            ) {
+                eprintln!("Could not deliver authentication rejection to {peer}: {error}");
+            }
             continue;
         }
 
-        let client_name = invitation
-            .get("client")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty() && value.len() <= 64)
-            .unwrap_or("Android tablet")
-            .chars()
-            .filter(|character| !character.is_control())
-            .collect::<String>();
-        if Instant::now() >= expires || !pairing.is_open() {
-            return Err("pairing invitation expired or was cancelled".into());
-        }
-        println!("Pair request from {client_name} at {peer}.");
-        if !pairing_window::approve(&client_name, &peer.to_string())? {
-            eprintln!("Pairing denied by local user.");
-            break;
-        }
-        if Instant::now() >= expires || !pairing.is_open() {
-            return Err("pairing invitation expired or was cancelled before local approval".into());
-        }
+        let client_name = remembered
+            .map(|device| device.name.clone())
+            .unwrap_or_else(|| {
+                invitation
+                    .get("client")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty() && value.len() <= 64)
+                    .unwrap_or("Android tablet")
+                    .chars()
+                    .filter(|character| !character.is_control())
+                    .collect::<String>()
+            });
+        let credential = if resumed {
+            println!("Remembered tablet reconnected: {client_name} at {peer}.");
+            None
+        } else {
+            println!("Pair request from {client_name} at {peer}.");
+            if !pairing_window::approve(&client_name, &peer.to_string())? {
+                eprintln!("Pairing denied by local user.");
+                drop(pairing.take());
+                continue;
+            }
+            if Instant::now() >= expires || !pairing.as_ref().is_some_and(PairingWindow::is_open) {
+                eprintln!("Pairing expired or cancelled before approval; device not remembered.");
+                drop(pairing.take());
+                continue;
+            }
+            Some(trust.remember(client_name)?)
+        };
 
-        drop(pairing);
-        let stream = reader.get_mut();
-        write_json_line(stream, &json!({"type": "paired", "version": 1}))?;
-        stream
-            .get_ref()
-            .set_read_timeout(Some(READ_LEASE))
-            .map_err(|error| format!("set session lease timeout: {error}"))?;
-        println!("Tablet paired. Disconnect or press Ctrl+C to stop the host.");
-        let result = serve_authenticated(&mut reader, Arc::clone(&scene), &mut input);
+        drop(pairing.take());
+        auth_failures = 0;
+        let output = source
+            .lock()
+            .map_err(|_| "source lock poisoned")?
+            .output
+            .clone();
+        let mut input = WindowsInput::new(OutputBounds {
+            left: output.left,
+            top: output.top,
+            width: output.width(),
+            height: output.height(),
+        })?;
+        let result: Result<(), String> = (|| {
+            let mut video_token = [0; 16];
+            getrandom::fill(&mut video_token)
+                .map_err(|error| format!("generate video credential: {error}"))?;
+            let video_token = hex(&video_token);
+            let video = VideoService::start(
+                listener
+                    .try_clone()
+                    .map_err(|error| format!("clone video listener: {error}"))?,
+                Arc::clone(&config),
+                video_token.clone(),
+                Arc::clone(&source),
+                encoder,
+            )?;
+            let selected = source
+                .lock()
+                .map_err(|_| "source lock poisoned")?
+                .metadata();
+            let stream = reader.get_mut();
+            write_json_line(
+                stream,
+                &json!({
+                    "type": "paired", "version": 2, "sources": Output::enumerate()?,
+                    "selected": selected, "video_token": video_token,
+                    "remembered_device": credential,
+                }),
+            )?;
+            stream
+                .get_ref()
+                .set_read_timeout(Some(READ_LEASE))
+                .map_err(|error| format!("set session lease timeout: {error}"))?;
+            println!("Tablet authenticated. Disconnect ends the session; Ctrl+C stops the host.");
+            let result = serve_authenticated(
+                &mut reader,
+                Arc::clone(&scene),
+                &mut input,
+                Arc::clone(&source),
+                video.running(),
+            );
+            drop(video);
+            result
+        })();
         let release_result = input.release_all();
         let clear_result = scene
             .lock()
             .map_err(|_| "canonical scene lock is poisoned".to_owned())
-            .and_then(|mut state| state.clear());
+            .map(|mut state| state.reset_session());
         println!("Remote session ended; host annotations were cleared.");
         release_result?;
         clear_result?;
-        return result;
+        if let Err(error) = result {
+            eprintln!("DrawDock session ended: {error}");
+        }
+        println!("Waiting for a remembered tablet to reconnect.");
     }
-    Err("pairing cancelled, expired or the attempt limit was reached".into())
 }
 
 fn invitation_uri(address: IpAddr, port: u16, fingerprint: &str, token: &str) -> String {
@@ -210,10 +318,14 @@ fn serve_authenticated(
     reader: &mut BufReader<StreamOwned<ServerConnection, TcpStream>>,
     scene: Arc<Mutex<Scene>>,
     input: &mut WindowsInput,
+    source: SharedSource,
+    video_running: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut window_start = Instant::now();
     let mut message_count = 0;
     let mut transaction: Option<CommitTransaction> = None;
+    let mut source_ready = false;
+    let mut source_scenes: HashMap<String, Scene> = HashMap::new();
     loop {
         let message = match read_json_line(reader) {
             Ok(message) => message,
@@ -230,6 +342,20 @@ fn serve_authenticated(
         };
 
         if window_start.elapsed() >= Duration::from_secs(1) {
+            let selected = source.lock().map_err(|_| "source lock poisoned")?.clone();
+            let still_present = Output::enumerate()?.iter().any(|output| {
+                output.name == selected.output.name
+                    && output.left == selected.output.left
+                    && output.top == selected.output.top
+                    && output.right == selected.output.right
+                    && output.bottom == selected.output.bottom
+            });
+            if !still_present {
+                return Err(
+                    "selected monitor was removed or its geometry changed; reconnect required"
+                        .into(),
+                );
+            }
             window_start = Instant::now();
             message_count = 0;
         }
@@ -244,7 +370,71 @@ fn serve_authenticated(
         {
             transaction = None;
         }
-        let response = process_command(&message, &scene, input, &mut transaction);
+        let response = (|| {
+            let command = message["type"].as_str().unwrap_or("");
+            if !video_running.load(Ordering::Acquire) {
+                if source_ready {
+                    input.release_all()?;
+                    source_ready = false;
+                }
+                if command == "source_ready" {
+                    return Err("video unavailable; reconnect required".to_owned());
+                }
+            }
+            if command != "heartbeat" {
+                source
+                    .lock()
+                    .map_err(|_| "source lock poisoned")?
+                    .validate_epoch(&message)?;
+            }
+            if command == "source_ready" {
+                source_ready = true;
+                return Ok(Some(
+                    json!({"type": "source_ready_ack", "source_epoch": message["source_epoch"]}),
+                ));
+            }
+            if command == "select_source" {
+                let name = message["source"].as_str().ok_or("source name missing")?;
+                let request_id = message["request_id"]
+                    .as_u64()
+                    .ok_or("source request id missing")?;
+                let output = Output::enumerate()?
+                    .into_iter()
+                    .find(|output| output.name == name)
+                    .ok_or("selected monitor is no longer available")?;
+                input.select_output(OutputBounds {
+                    left: output.left,
+                    top: output.top,
+                    width: output.width(),
+                    height: output.height(),
+                })?;
+                source_ready = false;
+                transaction = None;
+                let mut selected = source.lock().map_err(|_| "source lock poisoned")?;
+                let mut scene = scene.lock().map_err(|_| "scene lock poisoned")?;
+                source_scenes.insert(selected.output.name.clone(), scene.clone());
+                *scene = source_scenes.remove(name).unwrap_or_default();
+                selected.output = output;
+                selected.epoch = selected
+                    .epoch
+                    .checked_add(1)
+                    .ok_or("source epoch exhausted")?;
+                return Ok(Some(
+                    json!({"type": "source_selected", "request_id": request_id, "selected": selected.metadata()}),
+                ));
+            }
+            if !source_ready
+                && matches!(
+                    command,
+                    "pointer" | "commit" | "begin_commit" | "commit_chunk" | "finish_commit"
+                )
+            {
+                return Err(
+                    "input suspended until the selected video geometry is acknowledged".to_owned(),
+                );
+            }
+            process_command(&message, &scene, input, &mut transaction)
+        })();
         let response = match response {
             Ok(response) => response,
             Err(error) => {
@@ -454,7 +644,7 @@ fn process_command(
     }
 }
 
-fn read_json_line<R: BufRead>(reader: &mut R) -> io::Result<Value> {
+pub(crate) fn read_json_line<R: BufRead>(reader: &mut R) -> io::Result<Value> {
     let mut bytes = Vec::with_capacity(256);
     loop {
         let available = reader.fill_buf()?;
@@ -491,7 +681,7 @@ fn read_json_line<R: BufRead>(reader: &mut R) -> io::Result<Value> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-fn write_json_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), String> {
+pub(crate) fn write_json_line<W: Write>(writer: &mut W, value: &Value) -> Result<(), String> {
     serde_json::to_writer(&mut *writer, value)
         .map_err(|error| format!("serialize session response: {error}"))?;
     writer
@@ -509,7 +699,7 @@ fn is_allowed_bind(address: IpAddr) -> bool {
     }
 }
 
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
     }

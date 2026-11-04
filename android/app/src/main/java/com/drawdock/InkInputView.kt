@@ -48,6 +48,11 @@ class InkInputView(context: Context) : View(context) {
     var onUndo: (() -> Unit)? = null
     var onRedo: (() -> Unit)? = null
     var onPointerEvent: ((PointerEvent) -> Unit)? = null
+    var remoteVideoVisible = false
+        set(value) {
+            field = value
+            invalidate()
+        }
     private var inputReady = true
     private var pointerButton = "left"
     private var lastPointerPosition = 0f to 0f
@@ -281,10 +286,11 @@ class InkInputView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        for (mark in marks) drawMark(canvas, mark)
+        if (!remoteVideoVisible) for (mark in marks) drawMark(canvas, mark)
         if (activePoints.isNotEmpty()) {
             drawMark(canvas, InkMark(latchedTool, latchedColor, latchedWidth, activePoints))
         }
+        if (remoteVideoVisible) return
         paint.style = Paint.Style.FILL
         paint.color = 0x99000000.toInt()
         canvas.drawRect(0f, 0f, width.toFloat(), 44f, paint)

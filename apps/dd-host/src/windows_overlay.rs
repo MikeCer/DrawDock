@@ -229,8 +229,6 @@ unsafe extern "system" fn window_proc(
     lparam: Lparam,
 ) -> Lresult {
     if message == WM_DESTROY {
-        // SAFETY: Called by Windows for this live top-level window.
-        unsafe { PostQuitMessage(0) };
         return 0;
     }
     // SAFETY: Delegate all unhandled messages to the system window procedure.
@@ -238,32 +236,56 @@ unsafe extern "system" fn window_proc(
 }
 
 pub fn run(output: Output, scene: Arc<Mutex<Scene>>) -> Result<(), String> {
-    let width = output.width();
-    let height = output.height();
-    let pixel_count = usize::try_from(width)
-        .ok()
-        .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
-        .ok_or("monitor dimensions overflow")?;
-    let byte_count = pixel_count
-        .checked_mul(4)
-        .filter(|bytes| *bytes <= 512 * 1024 * 1024)
-        .ok_or("overlay surface exceeds the 512 MiB safety limit")?;
-    if width <= 0 || height <= 0 {
-        return Err("selected monitor has invalid dimensions".into());
-    }
+    run_selected(output, scene, None)
+}
 
-    // SAFETY: This process owns the windows created below. Setting DPI awareness before
-    // creating any windows ensures the native coordinates are physical desktop pixels.
+pub fn initialize_dpi() -> Result<(), String> {
+    // SAFETY: Called at startup, before monitor enumeration or window creation.
     if unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) } == 0 {
         return Err(last_error(
             "SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2)",
         ));
     }
+    Ok(())
+}
 
-    let mut pixels = vec![0u8; byte_count];
+pub fn run_selected(
+    mut output: Output,
+    scene: Arc<Mutex<Scene>>,
+    source: Option<crate::source::SharedSource>,
+) -> Result<(), String> {
+    loop {
+        let width = output.width();
+        let height = output.height();
+        let pixel_count = usize::try_from(width)
+            .ok()
+            .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)))
+            .ok_or("monitor dimensions overflow")?;
+        let byte_count = pixel_count
+            .checked_mul(4)
+            .filter(|bytes| *bytes <= 512 * 1024 * 1024)
+            .ok_or("overlay surface exceeds the 512 MiB safety limit")?;
+        if width <= 0 || height <= 0 {
+            return Err("selected monitor has invalid dimensions".into());
+        }
 
-    // SAFETY: Win32 handles and buffers are checked and released on every normal return path.
-    unsafe { show_layered_window(&output, width, height, &scene, &mut pixels) }
+        let mut pixels = vec![0u8; byte_count];
+
+        // SAFETY: Win32 handles and buffers are checked and released on every normal return path.
+        let switched = unsafe {
+            show_layered_window(&output, width, height, &scene, &mut pixels, source.as_ref())
+        }?;
+        if !switched {
+            return Ok(());
+        }
+        output = source
+            .as_ref()
+            .ok_or("source switch without source state")?
+            .lock()
+            .map_err(|_| "source lock is poisoned")?
+            .output
+            .clone();
+    }
 }
 
 unsafe fn show_layered_window(
@@ -272,7 +294,8 @@ unsafe fn show_layered_window(
     height: i32,
     scene: &Arc<Mutex<Scene>>,
     pixels: &mut [u8],
-) -> Result<(), String> {
+    selected_source: Option<&crate::source::SharedSource>,
+) -> Result<bool, String> {
     let mut current_scene = scene
         .lock()
         .map_err(|_| "canonical scene lock is poisoned".to_owned())?
@@ -298,7 +321,9 @@ unsafe fn show_layered_window(
         small_icon: null_mut(),
     };
     // SAFETY: class contains valid pointers for the duration of registration.
-    if unsafe { RegisterClassExW(&class) } == 0 {
+    if unsafe { RegisterClassExW(&class) } == 0
+        && io::Error::last_os_error().raw_os_error() != Some(1410)
+    {
         return Err(last_error("RegisterClassExW"));
     }
     let title: Vec<u16> = "DrawDock Windows Overlay\0".encode_utf16().collect();
@@ -465,7 +490,15 @@ unsafe fn show_layered_window(
         return Err(last_error("SetConsoleCtrlHandler"));
     }
     println!("Overlay visible. Use Ctrl+C here or close this process to stop.");
+    let mut switched = false;
     loop {
+        if let Some(source) = selected_source {
+            let selected = source.lock().map_err(|_| "source lock is poisoned")?;
+            if selected.output.name != output.name {
+                switched = true;
+                break;
+            }
+        }
         // SAFETY: message is a writable MSG and null hwnd receives all thread messages.
         if unsafe { PeekMessageW(&mut message, null_mut(), 0, 0, 1) } != 0 {
             if message.message == WM_QUIT {
@@ -527,7 +560,7 @@ unsafe fn show_layered_window(
         DeleteDC(dc);
         DestroyWindow(hwnd);
     }
-    Ok(())
+    Ok(switched)
 }
 
 fn render(scene: &Scene, width: usize, height: usize, pixels: &mut [u8]) {
@@ -836,7 +869,6 @@ unsafe extern "system" {
     fn ShowWindow(hwnd: Hwnd, command: i32) -> Bool;
     fn DestroyWindow(hwnd: Hwnd) -> Bool;
     fn DefWindowProcW(hwnd: Hwnd, message: u32, wparam: Wparam, lparam: Lparam) -> Lresult;
-    fn PostQuitMessage(exit_code: i32);
     fn PostThreadMessageW(thread_id: u32, message: u32, wparam: Wparam, lparam: Lparam) -> Bool;
     fn GetCurrentThreadId() -> u32;
     fn SetConsoleCtrlHandler(

@@ -5,7 +5,10 @@ param(
     [int]$Port = 47831,
     [string]$DeviceSerial = 'cfa3e5dce217',
     [string]$AdbPath = 'D:\Tools\android-dev\platform-tools\adb.exe',
-    [switch]$Restart
+    [switch]$Restart,
+    [switch]$Pair,
+    [ValidateSet('nvenc', 'software')]
+    [string]$VideoEncoder = 'nvenc'
 )
 
 Set-StrictMode -Version Latest
@@ -73,9 +76,12 @@ try {
     }
 
     Write-Host "Starting DrawDock on $Output, listening only on 127.0.0.1:$Port."
-    Write-Host 'Tablet: Connect > Scan QR, then approve your tablet in the PC dialog.'
-    Write-Host 'Press Ctrl+C here to stop. After expiry/disconnect, rerun with -Restart.'
-    & $hostExe serve --output $Output --listen 127.0.0.1 --port $Port
+    Write-Host 'Remembered tablet: tap Connect. New tablet: scan QR and approve remembering it.'
+    Write-Host 'Use -Restart -Pair to open a new invitation. Ctrl+C stops the host.'
+    Write-Host "Video: 1440p30, encoder $VideoEncoder. Use -VideoEncoder software if NVENC is unavailable."
+    $hostArguments = @('serve', '--output', $Output, '--listen', '127.0.0.1', '--port', "$Port", '--video-encoder', $VideoEncoder)
+    if ($Pair) { $hostArguments += '--pair' }
+    & $hostExe @hostArguments
     if ($LASTEXITCODE -ne 0) { throw "DrawDock exited with code $LASTEXITCODE." }
 }
 finally {

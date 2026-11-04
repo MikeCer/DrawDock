@@ -1,8 +1,10 @@
 # DrawDock protocol status
 
 The W2 host/client implement one authenticated TLS/TCP connection on port 47831
-for pairing, control, pointer events and annotation commits. The host generates
-an ephemeral TLS certificate and displays a QR invitation containing its
+for pairing, control, pointer events and annotation commits. A second pinned
+TLS connection on the same port carries video, so USB still needs only one ADB
+reverse mapping. The host generates
+a current-user DPAPI-protected, persistent TLS identity and displays a QR invitation containing its
 SHA-256 fingerprint and a single-use 128-bit token with a five-minute expiry.
 The Android client pins the scanned certificate fingerprint before sending
 the token; the host requires explicit approval in a native Windows dialog.
@@ -16,6 +18,21 @@ Only private/loopback numeric IP endpoints and the five specified unique fields
 are accepted by the scanner. The host's expiry is authoritative; no synchronized
 tablet clock is needed. The invitation is not a general-purpose deep link and
 scanning does not grant remote input until the PC approves.
+
+On first approval, `paired.remembered_device` contains a random 128-bit device
+ID and independent 256-bit reconnect credential. Android saves the endpoint,
+pin and credential encrypted with an Android Keystore AES-GCM key. The host
+persists only the credential's SHA-256 digest alongside the stable TLS identity,
+inside its DPAPI-protected registry.
+
+Subsequent control connections verify the saved certificate pin and send
+`{"type":"resume","device_id":...,"token":...}` instead of `pair`. A recognized,
+unrevoked credential receives the normal `paired` response without a local
+approval prompt; `remembered_device` is null (the saved credential is unchanged).
+Every connection still receives a fresh video credential and repeats video
+geometry readiness. The host resets pointer state/mode and clears the scene
+after each session, but keeps its listener and trust registry for reconnects.
+Authentication failures are bounded to three per ten-second window.
 
 Frames are newline-delimited JSON and limited to 64 KiB. Large annotation
 objects use ordered 48 KiB base64 chunks, a 512 KiB transaction limit and a
@@ -47,10 +64,57 @@ validation. Android regression tests cover both drag directions.
 The host defaults to loopback and accepts only explicitly selected private or
 loopback addresses. Wi-Fi has not been tested; no wildcard/public listener,
 firewall change, certificate bypass or automatic elevation is used. For the
-current manual USB test, the loopback listener and ADB reverse port 47831 are
-active; no session is yet authenticated. Stop the host and remove the mapping
-after testing.
+USB workflow, use the loopback listener and ADB reverse port 47831. The launcher
+cleans up mappings it creates after the host stops; externally created mappings
+remain the owner's responsibility.
 
-There is currently no video channel, screen capture, H.264 encoding or video
-reconciliation. Ports 47832 and 47833 are not implemented or active. QUIC/UDP
-is **DEFERRED**.
+Protocol version 2 sends the enumerated monitor list, selected monitor/geometry
+epoch and an independent 128-bit video credential in the approved `paired`
+response. The video connection authenticates with `{"type":"video","token":...}`
+after verifying the same certificate pin. It cannot grant control access.
+Its packets are `kind:u8 | epoch:u64-BE | length:u32-BE | payload`, bounded to
+8 MiB. Kind 1 is JSON H.264 configuration (bounded to 64 KiB), kind 2 is a
+complete Annex-B access unit, and kind 3 reports failure. SPS/PPS and IDR frames
+are repeated; no dependent encoded frame is silently dropped.
+
+The capture path remains the installed native Windows FFmpeg gdigrab process,
+controlled and cleaned up by Rust. It now preserves up to 2560x1440 at a
+requested 30 fps, without upscaling small sources, using Lanczos scaling and
+explicit limited-range BT.709 conversion/signaling. H.264 High level 5.0 retains
+4:2:0 Android compatibility. B-frames and encoder lookahead remain disabled.
+Video configuration reports the selected encoder and color space.
+
+The machine-specific launcher defaults to `h264_nvenc` (RTX 3080 Ti verified):
+P5/ultra-low-latency, CQ 18, VBR 12 Mbit/s target, 24 Mbit/s maximum, 2-Mbit VBV.
+Direct host CLI defaults to software `libx264`: veryfast/zerolatency, CRF 18,
+the same maximum/VBV, four threads. `--video-encoder software|nvenc` explicitly
+selects either; an unavailable encoder fails visibly rather than silently
+changing quality or hardware requirements.
+
+A one-access-unit pending queue and 500-ms socket write timeout remain bounded.
+The reader tolerates pipe batches by waiting up to 100 ms for that same slot,
+preserving all dependent frames in order; a prolonged stall closes video and
+requires reconnecting from a fresh keyframe. Shutdown cancels that wait.
+Android validates even dimensions/rate, selects a decoder supporting the format,
+checks its advertised size/rate capability, and uses the negotiated frame rate
+for timestamps. High bitrate/Wi-Fi behavior and physical decoder playback still
+require acceptance; this is not a measured input-to-photon latency claim.
+
+`select_source` carries a source name, request ID and current `source_epoch`.
+The host validates the output, releases buttons, resets any in-flight commit,
+retains scenes per monitor for this session, and increments the epoch. The
+overlay moves to that physical output and the encoder restarts with a fresh
+configuration/keyframe. Android cancels contact and fits video and ink to the
+same aspect-preserving rectangle. Input stays suspended until a decoded frame
+for that epoch is rendered and `source_ready` / `source_ready_ack` completes.
+All scene/pointer commands carry their enqueue-time epoch; stale geometry is
+rejected. Output removal/geometry changes require reconnection.
+
+The current capture contract is INCLUDED: Android shows only active provisional
+pen ink over video, not another copy of committed host objects. On pen-up,
+provisional ink hands off immediately to captured authoritative ink. This avoids
+indefinite double ink but can show a short handoff gap; a conservative
+presentation/capture revision watermark is **not implemented**. Reconciliation
+and physical visual acceptance remain **BLOCKED**, not passed.
+
+Ports 47832 and 47833 are unused. QUIC/UDP is **DEFERRED**.

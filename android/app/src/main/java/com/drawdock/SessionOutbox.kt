@@ -10,7 +10,8 @@ internal class SessionOutbox {
     fun offer(command: SessionCommand): Boolean = synchronized(commands) {
         val tail = commands.peekLast()
         if (tail is SessionCommand.Pointer && command is SessionCommand.Pointer &&
-            tail.generation == command.generation && tail.isMotion && command.isMotion
+            tail.generation == command.generation && tail.sourceEpoch == command.sourceEpoch &&
+            tail.isMotion && command.isMotion
         ) {
             commands.pollLast()
         }
@@ -39,16 +40,19 @@ internal class SessionOutbox {
 }
 
 internal sealed interface SessionCommand {
+    val sourceEpoch: Long
     data class Commit(
         val mark: InkMark,
         val viewportWidth: Int,
         val viewportHeight: Int,
         val reservedBytes: Long,
+        override val sourceEpoch: Long = 0,
     ) : SessionCommand
 
-    data class Control(val type: String) : SessionCommand
-    data class Mode(val mode: String, val requestId: Long) : SessionCommand
-    data class ClearDisplay(val requestId: Long) : SessionCommand
+    data class Control(val type: String, override val sourceEpoch: Long = 0) : SessionCommand
+    data class Mode(val mode: String, val requestId: Long, override val sourceEpoch: Long = 0) : SessionCommand
+    data class ClearDisplay(val requestId: Long, override val sourceEpoch: Long = 0) : SessionCommand
+    data class SelectSource(val source: String, val requestId: Long, override val sourceEpoch: Long) : SessionCommand
     data class Pointer(
         val action: String,
         val generation: Long,
@@ -57,6 +61,7 @@ internal sealed interface SessionCommand {
         val button: String,
         val viewportWidth: Int,
         val viewportHeight: Int,
+        override val sourceEpoch: Long = 0,
     ) : SessionCommand {
         val isMotion: Boolean get() = action == "move" || action == "hover"
     }

@@ -34,7 +34,7 @@ bypass that control. The app's tablet preview is not host annotation.
 For USB-only host connection, map the single implemented TLS/TCP port to the
 host's loopback listener. ADB is transport only; the app still verifies the
 scanned TLS certificate fingerprint and single-use pairing token, and the host
-requires explicit approval in a native Windows dialog:
+requires explicit approval in a native Windows dialog on first pairing:
 
 ```powershell
 & $adb -s $serial reverse tcp:47831 tcp:47831
@@ -54,9 +54,19 @@ prompted, and point the camera at the native DrawDock QR window on the PC.
 Confirm the endpoint on the tablet, then choose **Yes** in the PC's
 **DrawDock - approve tablet** dialog for your device. No fingerprint or token
 typing is needed. The QR expires after five minutes and closes after success;
-closing it cancels pairing. Restart the host after expiry, denial or disconnect
-to obtain a fresh invitation. A loopback QR works through the ADB reverse
+closing it cancels new enrollment. After this update, pair once to create the
+remembered credential; thereafter tap **Connect** without scanning or another
+PC approval, even after restarting either app. The host stays available after
+Disconnect. For another tablet or a lost/revoked credential, restart using
+`Start-DrawDockHost.ps1 -Restart -Pair` and scan a fresh invitation.
+A loopback QR works through the ADB reverse
 mapping above, not over Wi-Fi. Private-IP Wi-Fi still requires separate acceptance.
+
+**Pair another PC** opens enrollment without reusing the saved credential.
+**Forget PC** removes the tablet's saved endpoint/pin and Keystore-protected
+credential. It does not revoke a copied credential on the host: use the host's
+`devices revoke` command for that. This initial client remembers its last PC
+endpoint; changing transport/IP currently requires deliberate re-pairing.
 
 For optional ADB-assisted launch (without using the camera), pass
 `--pairing-info <new private local path>` to `serve`. The host
@@ -84,9 +94,10 @@ only the mapping created for DrawDock after the test:
 & $adb -s $serial reverse --remove tcp:47831
 ```
 
-The authenticated annotation/control channel is implemented. Live monitor video,
-Wi-Fi acceptance, and tablet-to-host pen behavior still require physical
-validation; a successful APK build is not evidence of those behaviors.
+The authenticated annotation/control channel and initial monitor video pipeline
+are implemented. Tablet playback, Wi-Fi acceptance, and tablet-to-host pen
+behavior still require physical validation; a successful APK build is not
+evidence of those behaviors.
 
 The single **Clear** control clears tablet and PC annotations in a paired
 session. It waits for the host acknowledgement before clearing the tablet;
@@ -95,3 +106,30 @@ and reports that no PC is connected. Both the APK and host must be rebuilt and
 restarted for the clear/redraw and shape-endpoint fixes; restarting ends the
 current session. Manually verify freehand, arrow, rectangle and ellipse on the
 physical PC display, then Clear and verify both surfaces are blank.
+
+## Live monitor workspace
+
+Rebuild both host and APK for protocol version 2, install the APK, and run
+`E:\dev\DrawDock\Start-DrawDockHost.ps1 -Restart`. Pair and approve viewing,
+annotation and pointer access. The monitor dropdown at the top lists the PC
+outputs. **Tools** reopens the floating controls; **Hide tools** closes them.
+Controls overlay the image rather than reserving drawing space. The video fills
+the largest available aspect-fit rectangle; letterbox margins are not ink
+targets. Changing the monitor cancels active pen contact and waits for video
+geometry acknowledgement before allowing new input.
+
+The installed FFmpeg 7.0 native Windows executable supplies gdigrab, libx264
+and NVIDIA NVENC. It is not downloaded or bundled. `DRAWDOCK_FFMPEG` can specify a direct
+executable path on another setup. The stream now uses a 2560x1440 bounding box
+at 30 fps, H.264 High/low-latency encoding and Android MediaCodec decoding.
+Update both applications: old APKs reject the larger format. The app selects
+and checks a decoder that supports the new geometry/rate before enabling input.
+It uses a second pinned-TLS connection on port 47831;
+no additional ADB port or firewall change is needed.
+
+Test every source, its corners/center and pen alignment on the physical PC
+display. The live video includes host ink; tablet provisional ink currently
+hands off on pen-up and can momentarily disappear before the captured ink
+arrives. Reconciliation latency/watermarks and fullscreen acceptance are not
+passed. If video fails or its bounded queue overflows, drawing is suspended
+and the app reports that reconnection is required.

@@ -2,18 +2,30 @@ package com.drawdock
 
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.SurfaceTexture
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
+import android.view.View
+import android.view.TextureView
+import android.view.Surface
+import android.view.WindowInsets
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.FrameLayout
+import android.widget.Spinner
+import android.widget.ArrayAdapter
+import android.widget.AdapterView
+import android.widget.HorizontalScrollView
 import android.text.InputType
 import androidx.activity.ComponentActivity
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private val qrScanner = registerForActivityResult(ScanContract()) { result ->
@@ -24,7 +36,25 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectionButton: Button
     private lateinit var clearPcButton: Button
     private lateinit var statusText: TextView
+    private lateinit var screenSelector: Spinner
+    private lateinit var workspace: FrameLayout
+    private lateinit var videoTexture: TextureView
+    private lateinit var toolsMenu: ScrollView
+    private lateinit var menuButton: Button
+    private var videoSurface: Surface? = null
+    private var pendingConnection: (() -> Unit)? = null
+    private var sources = emptyList<Pair<String, String>>()
+    private var sourceName = ""
+    private var sourceEpoch = 0L
+    private var pendingSourceRequestId: Long? = null
+    private var pendingReadyEpoch: Long? = null
+    private var readyEpoch: Long? = null
+    private var sessionActive = false
+    private var videoWidth = 0
+    private var videoHeight = 0
+    private var videoFailed = false
     private var sessionClient: SessionClient? = null
+    private val rememberedHostStore by lazy { RememberedHostStore(this) }
     private var sessionGeneration = 0L
     private var pendingModeRequestId: Long? = null
     private var pendingClearRequestId: Long? = null
@@ -39,18 +69,91 @@ class MainActivity : ComponentActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(0xFFF4F4F4.toInt())
+            setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars())
+                view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+                insets
+            }
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        screenSelector = Spinner(this).apply {
+            contentDescription = "PC screen to mirror"
+            isEnabled = false
+        }
+        screenSelector.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
+            listOf("Connect to select a PC screen"))
+        header.addView(screenSelector, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        menuButton = button("Hide tools") {
+            val show = toolsMenu.visibility != View.VISIBLE
+            toolsMenu.visibility = if (show) View.VISIBLE else View.GONE
+            text = if (show) "Hide tools" else "Tools"
+        }
+        header.addView(menuButton)
+        root.addView(header)
+        workspace = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
+        root.addView(workspace, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        videoTexture = TextureView(this).apply { alpha = 0f }
+        workspace.addView(videoTexture, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        workspace.addView(inputView, FrameLayout.LayoutParams(-1, -1, Gravity.CENTER))
+        videoTexture.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(texture: SurfaceTexture, width: Int, height: Int) {
+                videoSurface = Surface(texture)
+                pendingConnection?.let { connect ->
+                    pendingConnection = null
+                    connect()
+                }
+            }
+            override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
+            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+            override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
+                disconnectSession()
+                videoSurface?.release()
+                videoSurface = null
+                return true
+            }
+        }
+        workspace.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> fitWorkspace() }
+        screenSelector.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selected = sources.getOrNull(position)?.first ?: return
+                if (!sessionActive || selected == sourceName || pendingSourceRequestId != null) return
+                inputView.cancelActiveContact()
+                inputView.setInputReady(false)
+                val request = sessionClient?.selectSource(selected)
+                if (request == null) {
+                    statusText.text = "Screen change was not queued."
+                    screenSelector.setSelection(sources.indexOfFirst { it.first == sourceName }.coerceAtLeast(0))
+                    refreshInputReady()
+                } else {
+                    pendingSourceRequestId = request
+                    screenSelector.isEnabled = false
+                    statusText.text = "Waiting for the selected PC screen…"
+                    workspace.postDelayed({
+                        if (pendingSourceRequestId == request) {
+                            disconnectSession()
+                            statusText.text = "Screen change was not acknowledged; reconnect required."
+                        }
+                    }, 10_000)
+                }
+            }
         }
 
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(8, 8, 8, 8)
+            setBackgroundColor(0xEEF4F4F4.toInt())
+            isClickable = true
         }
         val topRow = row(controls)
         modeButton = button("Draw: ON") {
             requestModeChange()
         }.also(topRow::addView)
         connectionButton = button("Connect") {
-            if (sessionClient == null) showConnectionDialog() else disconnectSession()
+            if (sessionClient == null) connectRememberedOrPair() else disconnectSession()
         }.also(topRow::addView)
         listOf(
             "Freehand" to DrawTool.FREEHAND,
@@ -86,8 +189,12 @@ class MainActivity : ComponentActivity() {
                 configureInput()
             }.also(thirdRow::addView)
         }
-        button("Undo") { inputView.undo() }.also(thirdRow::addView)
-        button("Redo") { inputView.redo() }.also(thirdRow::addView)
+        button("Undo") {
+            if (sessionActive) sessionClient?.undo() else inputView.undo()
+        }.also(thirdRow::addView)
+        button("Redo") {
+            if (sessionActive) sessionClient?.redo() else inputView.redo()
+        }.also(thirdRow::addView)
         clearPcButton = button("Clear") {
             confirmRemoteClear()
         }.also(thirdRow::addView)
@@ -97,23 +204,15 @@ class MainActivity : ComponentActivity() {
             setTextColor(Color.DKGRAY)
             textSize = 12f
         }
+        val pairingRow = row(controls)
+        button("Pair another PC") {
+            disconnectSession()
+            showConnectionDialog()
+        }.also(pairingRow::addView)
+        button("Forget PC") { forgetRememberedHost() }.also(pairingRow::addView)
         controls.addView(statusText)
-        val scroll = ScrollView(this).apply { addView(controls) }
-        root.addView(
-            scroll,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-        root.addView(
-            inputView,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f,
-            ),
-        )
+        toolsMenu = ScrollView(this).apply { addView(controls); elevation = 8f }
+        workspace.addView(toolsMenu, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         setContentView(root)
         inputView.onCommit = { mark ->
             val client = sessionClient
@@ -136,6 +235,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        pendingConnection = null
         inputView.cancelActiveContact()
         disconnectSession()
         super.onPause()
@@ -150,6 +250,41 @@ class MainActivity : ComponentActivity() {
         inputView.configure(selectedTool, selectedColor, selectedWidth)
     }
 
+    private fun fitWorkspace() {
+        if (workspace.width <= 0 || workspace.height <= 0) return
+        val fit = ViewportFit.calculate(workspace.width, workspace.height,
+            videoWidth.takeIf { it > 0 } ?: workspace.width,
+            videoHeight.takeIf { it > 0 } ?: workspace.height)
+        for (view in listOf(videoTexture, inputView)) {
+            val old = view.layoutParams as FrameLayout.LayoutParams
+            if (old.width != fit.width || old.height != fit.height) {
+                inputView.cancelActiveContact()
+                view.layoutParams = FrameLayout.LayoutParams(fit.width, fit.height, Gravity.CENTER)
+            }
+        }
+        val menuHeight = minOf((240 * resources.displayMetrics.density).toInt(), workspace.height / 2)
+        if (toolsMenu.layoutParams.height != menuHeight) {
+            toolsMenu.layoutParams = FrameLayout.LayoutParams(-1, menuHeight, Gravity.TOP)
+        }
+    }
+
+    private fun refreshInputReady() {
+        inputView.setInputReady(
+            sessionClient == null || (sessionActive && readyEpoch == sourceEpoch && !videoFailed &&
+                pendingModeRequestId == null && pendingClearRequestId == null && pendingSourceRequestId == null),
+        )
+    }
+
+    private fun applySelectedSource(selected: JSONObject) {
+        sourceEpoch = selected.getLong("source_epoch")
+        sourceName = selected.getJSONObject("source").getString("name")
+        readyEpoch = null
+        pendingReadyEpoch = null
+        inputView.clear()
+        inputView.setInputReady(false)
+        screenSelector.setSelection(sources.indexOfFirst { it.first == sourceName }.coerceAtLeast(0))
+    }
+
     private fun requestModeChange() {
         val client = sessionClient
         if (client == null) {
@@ -161,7 +296,7 @@ class MainActivity : ComponentActivity() {
         val mode = if (inputView.drawMode) "pointer" else "draw"
         val requestId = client.requestMode(mode)
         if (requestId == null) {
-            inputView.setInputReady(true)
+            refreshInputReady()
             statusText.text = "Mode request was not queued."
             return
         }
@@ -169,11 +304,12 @@ class MainActivity : ComponentActivity() {
         statusText.text = "Waiting for host to acknowledge $mode mode…"
     }
 
-    private fun row(parent: LinearLayout) = LinearLayout(this).apply {
+    private fun row(parent: LinearLayout) = LinearLayout(this).apply row@{
         gravity = Gravity.CENTER_VERTICAL
         orientation = LinearLayout.HORIZONTAL
+        val scrolling = HorizontalScrollView(this@MainActivity).apply { addView(this@row) }
         parent.addView(
-            this,
+            scrolling,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -205,6 +341,33 @@ class MainActivity : ComponentActivity() {
                 }
             }
             .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun connectRememberedOrPair() {
+        val saved = try {
+            rememberedHostStore.load()
+        } catch (error: Exception) {
+            statusText.text = "Cannot unlock remembered PC: ${error.message}. Use Forget PC to re-pair."
+            return
+        }
+        if (saved == null) showConnectionDialog()
+        else connectToHost(saved.host, saved.port, saved.fingerprint, saved.token, saved.deviceId)
+    }
+
+    private fun forgetRememberedHost() {
+        android.app.AlertDialog.Builder(this)
+            .setMessage("Forget the saved PC on this tablet? Reconnecting will require a new QR invitation.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Forget") { _, _ ->
+                disconnectSession()
+                try {
+                    rememberedHostStore.forget()
+                    statusText.text = "PC forgotten on this tablet. Host revocation is managed on the PC."
+                } catch (error: Exception) {
+                    statusText.text = "Could not forget PC: ${error.message}"
+                }
+            }
             .show()
     }
 
@@ -301,7 +464,13 @@ class MainActivity : ComponentActivity() {
         connectToHost(host, port, fingerprint, token)
     }
 
-    private fun connectToHost(host: String, port: Int, fingerprint: String, token: String) {
+    private fun connectToHost(host: String, port: Int, fingerprint: String, token: String, deviceId: String? = null) {
+        val surface = videoSurface
+        if (surface == null) {
+            pendingConnection = { connectToHost(host, port, fingerprint, token, deviceId) }
+            statusText.text = "Waiting for the video surface…"
+            return
+        }
         sessionGeneration++
         val generation = sessionGeneration
         val client = SessionClient(
@@ -316,23 +485,32 @@ class MainActivity : ComponentActivity() {
                         if (connected) "HOST SESSION ACTIVE - Draw commits go to the PC"
                         else "LOCAL PREVIEW ONLY - no host session",
                     )
+                    sessionActive = connected
                     if (connected) {
-                        inputView.setInputReady(true)
+                        refreshInputReady()
                         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         connectionButton.text = "Disconnect"
                         clearPcButton.isEnabled = pendingClearRequestId == null
+                        screenSelector.isEnabled = pendingSourceRequestId == null
                     } else {
-                        inputView.setInputReady(true)
+                        inputView.setInputReady(false)
                         inputView.drawMode = true
                         modeButton.text = "Draw: ON"
                         pendingModeRequestId = null
                         pendingClearRequestId = null
                         clearPcButton.isEnabled = true
+                        screenSelector.isEnabled = false
+                        readyEpoch = null
+                        inputView.remoteVideoVisible = false
+                        videoTexture.alpha = 0f
                         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                     if (!connected && !message.startsWith("Connecting")) {
                         sessionClient = null
                         connectionButton.text = "Connect"
+                        toolsMenu.visibility = View.VISIBLE
+                        menuButton.text = "Hide tools"
+                        refreshInputReady()
                     }
                 }
             },
@@ -340,7 +518,7 @@ class MainActivity : ComponentActivity() {
                 if (generation == sessionGeneration && requestId == pendingModeRequestId) {
                     pendingModeRequestId = null
                     inputView.drawMode = mode == "draw"
-                    inputView.setInputReady(true)
+                    refreshInputReady()
                     modeButton.text = if (inputView.drawMode) "Draw: ON" else "Pointer: ON"
                     statusText.text = "Host acknowledged ${mode} mode"
                 }
@@ -349,13 +527,82 @@ class MainActivity : ComponentActivity() {
                 if (generation == sessionGeneration && requestId == pendingClearRequestId) {
                     pendingClearRequestId = null
                     inputView.clear()
-                    inputView.setInputReady(true)
+                    refreshInputReady()
                     clearPcButton.isEnabled = true
                     statusText.text = "Tablet and PC annotations cleared."
                 }
             },
+            videoSurface = surface,
+            onSources = { list, selected ->
+                if (generation == sessionGeneration) {
+                    sources = (0 until list.length()).map { index ->
+                        val output = list.getJSONObject(index)
+                        val name = output.getString("name")
+                        val width = output.getInt("right") - output.getInt("left")
+                        val height = output.getInt("bottom") - output.getInt("top")
+                        name to "$name ($width x $height)"
+                    }
+                    screenSelector.adapter = ArrayAdapter(this,
+                        android.R.layout.simple_spinner_dropdown_item, sources.map { it.second })
+                    applySelectedSource(selected)
+                    videoFailed = false
+                }
+            },
+            onSourceSelected = { selected, requestId ->
+                if (generation == sessionGeneration && requestId == pendingSourceRequestId) {
+                    pendingSourceRequestId = null
+                    applySelectedSource(selected)
+                    screenSelector.isEnabled = true
+                    statusText.text = "Loading $sourceName…"
+                }
+            },
+            onSourceReady = { epoch ->
+                if (generation == sessionGeneration && epoch == sourceEpoch) {
+                    readyEpoch = epoch
+                    pendingReadyEpoch = null
+                    inputView.remoteVideoVisible = true
+                    refreshInputReady()
+                    toolsMenu.visibility = View.GONE
+                    menuButton.text = "Tools"
+                    statusText.text = "Live $sourceName - ${videoWidth}x$videoHeight H.264 / included host ink"
+                }
+            },
+            onVideoGeometry = { epoch, width, height ->
+                if (generation == sessionGeneration && epoch >= sourceEpoch) {
+                    videoWidth = width
+                    videoHeight = height
+                    fitWorkspace()
+                }
+            },
+            onVideoRendered = { epoch ->
+                if (generation == sessionGeneration && epoch == sourceEpoch) {
+                    videoTexture.alpha = 1f
+                    if (pendingSourceRequestId == null && readyEpoch != epoch && pendingReadyEpoch != epoch) {
+                        if (sessionClient?.sourceReady(epoch) == true) {
+                            pendingReadyEpoch = epoch
+                        } else {
+                            statusText.text = "Video geometry acknowledgement was not queued."
+                        }
+                    }
+                }
+            },
+            onVideoError = { message ->
+                if (generation == sessionGeneration) {
+                    videoFailed = true
+                    inputView.setInputReady(false)
+                    statusText.text = "Video unavailable: $message. Reconnect required."
+                    toolsMenu.visibility = View.VISIBLE
+                    menuButton.text = "Hide tools"
+                }
+            },
+            rememberedDeviceId = deviceId,
+            onRemembered = { id, credential ->
+                val pin = fingerprint.replace(":", "").replace(" ", "").lowercase()
+                rememberedHostStore.save(RememberedHost(host, port, pin, id, credential))
+            },
         )
         sessionClient = client
+        inputView.setInputReady(false)
         connectionButton.text = "Connecting…"
         client.connect()
     }
@@ -374,7 +621,7 @@ class MainActivity : ComponentActivity() {
                 inputView.setInputReady(false)
                 val requestId = client.clearDisplay()
                 if (requestId == null) {
-                    inputView.setInputReady(true)
+                    refreshInputReady()
                     statusText.text = "Clear was not queued; annotations were not cleared."
                 } else {
                     pendingClearRequestId = requestId
@@ -383,7 +630,7 @@ class MainActivity : ComponentActivity() {
                     inputView.postDelayed({
                         if (pendingClearRequestId == requestId && sessionClient === client) {
                             pendingClearRequestId = null
-                            inputView.setInputReady(true)
+                            refreshInputReady()
                             clearPcButton.isEnabled = true
                             statusText.text = "Clear was not acknowledged; PC state is unknown."
                         }
@@ -398,6 +645,15 @@ class MainActivity : ComponentActivity() {
         inputViewOrNullCancel()
         sessionClient?.disconnect()
         sessionClient = null
+        sessionActive = false
+        readyEpoch = null
+        pendingReadyEpoch = null
+        pendingSourceRequestId = null
+        videoWidth = 0
+        videoHeight = 0
+        if (::videoTexture.isInitialized) videoTexture.alpha = 0f
+        if (::screenSelector.isInitialized) screenSelector.isEnabled = false
+        inputView.remoteVideoVisible = false
         pendingModeRequestId = null
         pendingClearRequestId = null
         if (::clearPcButton.isInitialized) clearPcButton.isEnabled = true

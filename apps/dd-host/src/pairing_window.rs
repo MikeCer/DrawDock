@@ -86,7 +86,8 @@ impl Drop for PairingWindow {
 
 pub fn approve(client: &str, peer: &str) -> Result<bool, String> {
     let message = wide(&format!(
-        "Allow tablet \"{client}\" at {peer} to draw on this PC and request pointer control?\n\n\
+        "Remember tablet \"{client}\" at {peer} and allow it to view PC screens, draw annotations and request pointer control?\n\n\
+         This tablet will reconnect without asking again, including after a host restart, until you revoke it.\n\n\
          Choose Yes only if you just scanned this PC's QR invitation or used its trusted \
          USB invitation. Otherwise choose No."
     ));
