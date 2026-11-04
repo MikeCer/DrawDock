@@ -348,11 +348,11 @@ class MainActivity : ComponentActivity() {
         sessionActive && readyEpoch == sourceEpoch && !videoFailed && pendingSourceRequestId == null &&
             pendingEditorRequestId == null && pendingClearRequestId == null && pendingModeRequestId == null
 
-    private fun sendEditor(message: JSONObject) {
-        if (!editorReady()) { notifyDrawing("Connect and wait until the PC screen is ready."); return }
-        val client = sessionClient ?: return
+    private fun sendEditor(message: JSONObject): Boolean {
+        if (!editorReady()) { notifyDrawing("Connect and wait until the PC screen is ready."); return false }
+        val client = sessionClient ?: return false
         val request = client.editor(message)
-        if (request == null) { notifyDrawing("Drawing command was not queued."); return }
+        if (request == null) { notifyDrawing("Drawing command was not queued."); return false }
         pendingEditorRequestId = request
         refreshInputReady()
         workspace.postDelayed({
@@ -361,21 +361,21 @@ class MainActivity : ComponentActivity() {
                 notifyDrawing("Drawing command was not acknowledged; reconnect required.")
             }
         }, 10_000)
+        return true
     }
 
     private fun transformJson(value: Affine2D) = JSONObject()
         .put("a", value.a.toDouble()).put("b", value.b.toDouble()).put("c", value.c.toDouble())
         .put("d", value.d.toDouble()).put("tx", value.tx.toDouble()).put("ty", value.ty.toDouble())
 
-    private fun sendTransform(id: Long, transform: Affine2D) {
+    private fun sendTransform(id: Long, transform: Affine2D): Boolean =
         sendEditor(JSONObject().put("type", "transform_object").put("object_id", id)
             .put("transform", transformJson(transform)))
-    }
 
     private fun mirror(horizontal: Boolean) {
         val selected = inputView.selection
         if (selected == null) { notifyDrawing("Use Select / Move and tap an object first."); return }
-        val delta = Affine2D.around(selected.bounds.centerX, selected.bounds.centerY,
+        val delta = Affine2D.around(selected.center.first, selected.center.second,
             if (horizontal) -1f else 1f, 0f, 0f, if (horizontal) 1f else -1f)
         sendTransform(selected.id, delta * selected.transform)
     }
@@ -384,7 +384,10 @@ class MainActivity : ComponentActivity() {
         if (response.optLong("source_epoch", -1) != sourceEpoch) return
         val request = response.optLong("request_id", -1)
         if (response.optString("type") == "error") {
-            if (pendingEditorRequestId == request) pendingEditorRequestId = null
+            if (pendingEditorRequestId == request) {
+                pendingEditorRequestId = null
+                inputView.cancelSelectionPreview()
+            }
             if (pendingModeRequestId == request) pendingModeRequestId = null
             if (pendingClearRequestId == request) pendingClearRequestId = null
             refreshInputReady()
@@ -399,16 +402,19 @@ class MainActivity : ComponentActivity() {
         if (response.has("selection")) {
             inputView.selection = response.optJSONObject("selection")?.let {
                 val bounds = it.getJSONObject("bounds")
+                val local = it.getJSONObject("local_bounds")
                 val matrix = it.getJSONObject("transform")
                 EditorSelection(it.getLong("id"), EditorBounds(
                     bounds.getDouble("left").toFloat(), bounds.getDouble("top").toFloat(),
                     bounds.getDouble("right").toFloat(), bounds.getDouble("bottom").toFloat()),
                     Affine2D(matrix.getDouble("a").toFloat(), matrix.getDouble("b").toFloat(),
                         matrix.getDouble("c").toFloat(), matrix.getDouble("d").toFloat(),
-                        matrix.getDouble("tx").toFloat(), matrix.getDouble("ty").toFloat()))
+                        matrix.getDouble("tx").toFloat(), matrix.getDouble("ty").toFloat()),
+                    EditorBounds(local.getDouble("left").toFloat(), local.getDouble("top").toFloat(),
+                        local.getDouble("right").toFloat(), local.getDouble("bottom").toFloat()))
             }
             statusText.text = if (inputView.selection == null) "No object selected; long-press for tools."
-                else "Object selected. Drag to move, or choose Rotate / Resize / Mirror."
+                else "Drag to move; drag a corner to resize or the curved-arrow handle to rotate."
         }
         refreshInputReady()
     }

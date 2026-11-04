@@ -641,6 +641,10 @@ mod tests {
         assert_editor(&selected, 110, epoch);
         assert_eq!(selected["selection"]["id"], 200);
         assert_eq!(
+            selected["selection"]["local_bounds"],
+            selected["selection"]["bounds"]
+        );
+        assert_eq!(
             selected["selection"]["bounds"].as_object().unwrap().len(),
             4
         );
@@ -657,6 +661,10 @@ mod tests {
         );
         assert_editor(&transformed, 111, epoch);
         assert_eq!(transformed["selection"]["id"], 200);
+        assert_eq!(
+            transformed["selection"]["local_bounds"],
+            selected["selection"]["local_bounds"]
+        );
         assert_eq!(
             transformed["selection"]["bounds"]
                 .as_object()
@@ -783,8 +791,48 @@ mod tests {
             json!({"type":"select_object","x":0.75,"y":0.35,"request_id":128}),
         );
         assert!(selected["selection"].is_null());
+        let image = send(
+            &mut stream,
+            json!({"type":"commit","object":{"id":300,"tool":"image","style":{"rgba":[255,0,0,255],"width":0.008},
+                "points":[{"x":0.2,"y":0.2},{"x":0.3,"y":0.3}],"image_data":image_data}}),
+        );
+        assert_eq!(image["type"], "ack");
+        let aspect = width as f64 / height as f64;
+        let a = std::f64::consts::FRAC_1_SQRT_2;
+        let b = a * aspect;
+        let c = -a / aspect;
+        let tx = 0.25 - a * 0.25 - c * 0.25;
+        let ty = 0.25 - b * 0.25 - a * 0.25;
+        let rotated = send(
+            &mut stream,
+            json!({"type":"transform_object","object_id":300,"request_id":129,
+                "transform":{"a":a,"b":b,"c":c,"d":a,"tx":tx,"ty":ty}}),
+        );
+        assert_editor(&rotated, 129, epoch);
+        for (field, expected) in [("left", 0.2), ("top", 0.2), ("right", 0.3), ("bottom", 0.3)] {
+            assert!(
+                (rotated["selection"]["local_bounds"][field]
+                    .as_f64()
+                    .unwrap()
+                    - expected)
+                    .abs()
+                    < 0.00001
+            );
+        }
+        let selected = send(
+            &mut stream,
+            json!({"type":"select_object","x":0.25,"y":0.25,"request_id":130}),
+        );
+        assert_eq!(selected["selection"], rotated["selection"]);
+        wait_pixel(
+            &mut stream,
+            [left, top, width, height],
+            left + ((a * 0.205 + c * 0.205 + tx) * width as f64) as i32,
+            top + ((b * 0.205 + a * 0.205 + ty) * height as f64) as i32,
+            [12, 34, 56],
+        );
         println!(
-            "Native TLS editor commits, transformed bounds, correlated errors, board policy/history, canvas synchronization, and physical PNG/blackboard pixels verified."
+            "Native TLS editor commits, oriented image selection/reselection, correlated errors, board policy/history, canvas synchronization, and physical rotated PNG/blackboard pixels verified."
         );
         drop(stream);
         host.wait("Waiting for a remembered tablet to reconnect");

@@ -1,10 +1,12 @@
 package com.drawdock
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.view.MotionEvent
+import android.view.PointerIcon
 import android.view.View
 import android.view.ViewConfiguration
 import android.os.SystemClock
@@ -68,13 +70,39 @@ class InkInputView(context: Context) : View(context) {
     private val vertices = mutableListOf<Pair<Float, Float>>()
     private var vertexStyle: InkMark? = null
     var selection: EditorSelection? = null
-        set(value) { field = value; invalidate() }
+        set(value) {
+            field = value
+            pendingTransform = null
+            invalidate()
+        }
     private var editStart: EditorSelection? = null
-    private var editDelta: Affine2D? = null
+    private var editTransform: Affine2D? = null
+    private var pendingTransform: Affine2D? = null
+    private var editTool = DrawTool.SELECT_MOVE
+    private var resizeCorner = 2
+    private val density get() = resources.displayMetrics.density
+    private val selectionBlue = 0xFF0099FF.toInt()
+    private val rotationCursor: PointerIcon by lazy {
+        val size = (32 * density).toInt().coerceAtLeast(32)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val cursorCanvas = Canvas(bitmap)
+        val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        cursorPaint.color = 0xFFFFFFFF.toInt()
+        cursorPaint.strokeWidth = 5 * density
+        drawRotationGlyph(cursorCanvas, cursorPaint, size / 2f, size / 2f, 9 * density)
+        cursorPaint.color = 0xFF000000.toInt()
+        cursorPaint.strokeWidth = 2 * density
+        drawRotationGlyph(cursorCanvas, cursorPaint, size / 2f, size / 2f, 9 * density)
+        PointerIcon.create(bitmap, size / 2f, size / 2f)
+    }
     private var laserPosition: Pair<Float, Float>? = null
     var onLongPress: ((Float, Float) -> Unit)? = null
     var onSelect: ((Float, Float) -> Unit)? = null
-    var onTransform: ((Long, Affine2D) -> Unit)? = null
+    var onTransform: ((Long, Affine2D) -> Boolean)? = null
     var onRequestText: ((Float, Float) -> Unit)? = null
     var onLaser: ((Boolean, Float, Float, Int) -> Unit)? = null
     var onMessage: ((String) -> Unit)? = null
@@ -149,7 +177,12 @@ class InkInputView(context: Context) : View(context) {
             vertexStyle = null
         }
         editStart = null
-        editDelta = null
+        editTransform = null
+        invalidate()
+    }
+
+    fun cancelSelectionPreview() {
+        pendingTransform = null
         invalidate()
     }
 
@@ -215,10 +248,21 @@ class InkInputView(context: Context) : View(context) {
                 pointerDownSent = false
                 hold.begin(point.first, point.second, SystemClock.uptimeMillis())
                 postDelayed(holdTimer, 550)
-                editStart = selection?.takeIf {
-                    isEditTool(latchedTool) && it.bounds.contains(point.first / width, point.second / height)
+                editTool = latchedTool
+                resizeCorner = 2
+                editStart = selection?.takeIf { selected ->
+                    if (!isEditTool(latchedTool)) false else {
+                        val frame = selectionFrame(selected)
+                        val handle = frame.hitHandle(point.first, point.second, 24 * density,
+                            keepMoveCenter = latchedTool == DrawTool.SELECT_MOVE)
+                        if (handle != null) {
+                            editTool = if (handle == -1) DrawTool.ROTATE else DrawTool.RESIZE
+                            if (handle >= 0) resizeCorner = handle
+                        }
+                        handle != null || frame.contains(point.first, point.second, 12 * density)
+                    }
                 }
-                editDelta = null
+                editTransform = null
                 if (contactReady && drawMode && latchedTool == DrawTool.LASER) updateLaser(point)
                 invalidate()
             }
@@ -236,7 +280,7 @@ class InkInputView(context: Context) : View(context) {
                 stopLaser()
                 activePoints.clear()
                 editStart = null
-                editDelta = null
+                editTransform = null
                 invalidate()
             }
             else -> Unit
@@ -264,7 +308,7 @@ class InkInputView(context: Context) : View(context) {
                 return
             }
             activePoints.add(point)
-            editDelta = editStart?.let { transformDelta(it, point) }
+            editTransform = editStart?.let { transformedSelection(it, point) }
         }
     }
 
@@ -277,7 +321,7 @@ class InkInputView(context: Context) : View(context) {
         reducer.cancel()
         activePoints.clear()
         editStart = null
-        editDelta = null
+        editTransform = null
         onLongPress?.invoke(point.first, point.second)
         invalidate()
     }
@@ -305,7 +349,9 @@ class InkInputView(context: Context) : View(context) {
             isEditTool(latchedTool) -> {
                 val selected = editStart
                 if (selected != null && moved) {
-                    onTransform?.invoke(selected.id, transformDelta(selected, end) * selected.transform)
+                    val transform = transformedSelection(selected, end)
+                    pendingTransform = transform
+                    if (onTransform?.invoke(selected.id, transform) != true) pendingTransform = null
                 } else onSelect?.invoke(end.first / width, end.second / height)
             }
             latchedTool == DrawTool.TEXT -> onRequestText?.invoke(end.first / width, end.second / height)
@@ -368,24 +414,62 @@ class InkInputView(context: Context) : View(context) {
         invalidate()
     }
 
-    private fun transformDelta(selected: EditorSelection, end: Pair<Float, Float>): Affine2D {
+    private fun transformedSelection(selected: EditorSelection, end: Pair<Float, Float>): Affine2D {
         val start = activePoints.firstOrNull() ?: end
-        val bounds = selected.bounds
         val dx = (end.first - start.first) / width
         val dy = (end.second - start.second) / height
-        return when (latchedTool) {
-            DrawTool.RESIZE -> Affine2D.around(bounds.left, bounds.top,
-                (1 + dx / (bounds.right - bounds.left).coerceAtLeast(0.01f)).coerceIn(0.05f, 8f),
-                0f, 0f, (1 + dy / (bounds.bottom - bounds.top).coerceAtLeast(0.01f)).coerceIn(0.05f, 8f))
+        return when (editTool) {
+            DrawTool.RESIZE -> selected.resize(resizeCorner,
+                start.first / width to start.second / height, end.first / width to end.second / height)
             DrawTool.ROTATE -> {
-                val cx = bounds.centerX * width
-                val cy = bounds.centerY * height
+                val center = selected.center
+                val cx = center.first * width
+                val cy = center.second * height
                 val angle = kotlin.math.atan2(end.second - cy, end.first - cx) -
                     kotlin.math.atan2(start.second - cy, start.first - cx)
-                Affine2D.rotation(angle, width, height, bounds.centerX, bounds.centerY)
+                Affine2D.rotation(angle, width, height, center.first, center.second) * selected.transform
             }
-            else -> Affine2D(tx = dx, ty = dy)
+            else -> Affine2D(tx = dx, ty = dy) * selected.transform
         }
+    }
+
+    private fun selectionFrame(selected: EditorSelection) =
+        selected.frame(width, height, 48 * density, 16 * density,
+            editTransform ?: pendingTransform ?: selected.transform)
+
+    override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
+        val selected = selection
+        if (!drawMode || !inputReady || selected == null || !isEditTool(activeTool) ||
+            width == 0 || height == 0 || pointerIndex !in 0 until event.pointerCount) {
+            return super.onResolvePointerIcon(event, pointerIndex)
+        }
+        val x = event.getX(pointerIndex)
+        val y = event.getY(pointerIndex)
+        val frame = selectionFrame(selected)
+        val handle = frame.hitHandle(x, y, 24 * density, keepMoveCenter = activeTool == DrawTool.SELECT_MOVE)
+        if (handle == -1 || (handle == null && activeTool == DrawTool.ROTATE && frame.contains(x, y, 12 * density))) {
+            return rotationCursor
+        }
+        val corner = handle ?: if (activeTool == DrawTool.RESIZE && frame.contains(x, y, 12 * density)) 2 else null
+        if (corner != null) {
+            val angle = resizeAngle(frame, corner).let { (it + 180f) % 180f }
+            val type = when {
+                angle < 22.5f || angle >= 157.5f -> PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW
+                angle < 67.5f -> PointerIcon.TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW
+                angle < 112.5f -> PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
+                else -> PointerIcon.TYPE_TOP_RIGHT_DIAGONAL_DOUBLE_ARROW
+            }
+            return PointerIcon.getSystemIcon(context, type)
+        }
+        return if (frame.contains(x, y, 12 * density)) PointerIcon.getSystemIcon(context, PointerIcon.TYPE_ALL_SCROLL)
+            else super.onResolvePointerIcon(event, pointerIndex)
+    }
+
+    private fun resizeAngle(frame: SelectionFrame, corner: Int): Float {
+        val point = frame.corners[corner]
+        val opposite = frame.corners[(corner + 2) % 4]
+        return Math.toDegrees(kotlin.math.atan2(point.second - opposite.second,
+            point.first - opposite.first).toDouble()).toFloat()
     }
 
     private fun isEditTool(tool: DrawTool) =
@@ -437,19 +521,7 @@ class InkInputView(context: Context) : View(context) {
         } else if (activePoints.isNotEmpty() && inputReady && contactReady && drawMode && !isEditTool(latchedTool)) {
             drawMark(canvas, InkMark(latchedTool, latchedColor, latchedWidth, shapePoints(activePoints)))
         }
-        selection?.let { selected ->
-            val bounds = editDelta?.map(selected.bounds) ?: selected.bounds
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = 2 * resources.displayMetrics.density
-            paint.color = 0xFF0099FF.toInt()
-            canvas.drawRect(bounds.left * width, bounds.top * height,
-                bounds.right * width, bounds.bottom * height, paint)
-            paint.style = Paint.Style.FILL
-            for ((x, y) in listOf(bounds.left to bounds.top, bounds.right to bounds.top,
-                bounds.left to bounds.bottom, bounds.right to bounds.bottom)) {
-                canvas.drawCircle(x * width, y * height, 4 * resources.displayMetrics.density, paint)
-            }
-        }
+        if (width > 0 && height > 0) selection?.let { drawSelection(canvas, selectionFrame(it)) }
         if (remoteVideoVisible) return
         paint.style = Paint.Style.FILL
         paint.color = 0x99000000.toInt()
@@ -462,6 +534,65 @@ class InkInputView(context: Context) : View(context) {
             28f * resources.displayMetrics.density,
             paint,
         )
+    }
+
+    private fun drawSelection(canvas: Canvas, frame: SelectionFrame) {
+        val path = Path().apply {
+            moveTo(frame.corners[0].first, frame.corners[0].second)
+            for ((x, y) in frame.corners.drop(1)) lineTo(x, y)
+            close()
+        }
+        paint.style = Paint.Style.STROKE
+        paint.color = 0xFFFFFFFF.toInt()
+        paint.strokeWidth = 7 * density
+        canvas.drawPath(path, paint)
+        paint.color = selectionBlue
+        paint.strokeWidth = 4 * density
+        canvas.drawPath(path, paint)
+        val topX = (frame.corners[0].first + frame.corners[1].first) / 2
+        val topY = (frame.corners[0].second + frame.corners[1].second) / 2
+        val (rx, ry) = frame.rotationHandle
+        paint.color = 0xFFFFFFFF.toInt()
+        paint.strokeWidth = 5 * density
+        canvas.drawLine(topX, topY, rx, ry, paint)
+        paint.color = selectionBlue
+        paint.strokeWidth = 2 * density
+        canvas.drawLine(topX, topY, rx, ry, paint)
+        for ((index, point) in (frame.corners + frame.rotationHandle).withIndex()) {
+            val (x, y) = point
+            paint.style = Paint.Style.FILL
+            paint.color = 0xFFFFFFFF.toInt()
+            canvas.drawCircle(x, y, 14 * density, paint)
+            paint.style = Paint.Style.STROKE
+            paint.color = selectionBlue
+            paint.strokeWidth = 2 * density
+            canvas.drawCircle(x, y, 14 * density, paint)
+            if (index == 4) drawRotationGlyph(canvas, paint, x, y, 7 * density) else {
+                canvas.save()
+                canvas.rotate(resizeAngle(frame, index), x, y)
+                val length = 7 * density
+                val head = 4 * density
+                val arrow = Path().apply {
+                    moveTo(x - length, y); lineTo(x + length, y)
+                    moveTo(x - length + head, y - head); lineTo(x - length, y); lineTo(x - length + head, y + head)
+                    moveTo(x + length - head, y - head); lineTo(x + length, y); lineTo(x + length - head, y + head)
+                }
+                canvas.drawPath(arrow, paint)
+                canvas.restore()
+            }
+        }
+    }
+
+    private fun drawRotationGlyph(canvas: Canvas, targetPaint: Paint, x: Float, y: Float, radius: Float) {
+        canvas.drawArc(x - radius, y - radius, x + radius, y + radius, -135f, 270f, false, targetPaint)
+        val tipX = x - radius * 0.707107f
+        val tipY = y + radius * 0.707107f
+        val head = radius * 0.65f
+        canvas.drawPath(Path().apply {
+            moveTo(tipX + head, tipY)
+            lineTo(tipX, tipY)
+            lineTo(tipX, tipY + head)
+        }, targetPaint)
     }
 
     private fun drawMark(canvas: Canvas, mark: InkMark) {

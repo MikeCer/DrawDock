@@ -142,7 +142,7 @@ These commands require `request_id` and `source_epoch`:
 
 | Type | Additional fields | Effect |
 |---|---|---|
-| `select_object` | Normalized `x`, `y` | Topmost transformed bounding-box selection |
+| `select_object` | Normalized `x`, `y` | Topmost transformed geometry hit |
 | `transform_object` | `object_id`, absolute `transform` | One undoable affine edit |
 | `set_canvas` | Boolean `blackboard`, `grid` | One undoable canvas change; releases buttons |
 
@@ -168,6 +168,7 @@ Responses have this shape (`selection` can be `null`):
   "selection":{
     "id":42,
     "bounds":{"left":0.2,"top":0.2,"right":0.6,"bottom":0.5},
+    "local_bounds":{"left":0.2,"top":0.2,"right":0.6,"bottom":0.5},
     "transform":{"a":1,"b":0,"c":0,"d":1,"tx":0,"ty":0}
   },
   "canvas":{"blackboard":false,"grid":false},
@@ -175,9 +176,16 @@ Responses have this shape (`selection` can be `null`):
 }
 ```
 
-Bounds are the transformed normalized selection bounds. Canvas changes return
-null selection. Blackboard forces Draw, and Pointer mode is prohibited while
-it is active, including when restored by Undo.
+`bounds` is the transformed normalized axis-aligned extent. `local_bounds` is
+the normalized rectangle before transformation, including circle aspect
+correction and arrowheads. Transform its four corners (top-left, top-right,
+bottom-right, bottom-left) to render the oriented selection frame. Do not apply
+the matrix to `bounds`: an axis-aligned extent loses orientation and cannot
+recover the original rectangle. Updated clients require `local_bounds`, so
+update/restart the host together with the APK.
+
+Canvas changes return null selection. Blackboard forces Draw, and Pointer mode
+is prohibited while it is active, including when restored by Undo.
 
 ## Modes, pointer and history
 

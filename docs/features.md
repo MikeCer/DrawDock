@@ -46,19 +46,28 @@ Hover does not create permanent ink.
 
 ## Selection and transformations
 
-Choose Select / Move and tap an object. Selection uses the topmost transformed
-bounding box, not precise path-interior hit testing. Blue bounds and corner
-markers appear on the tablet.
+Choose Select / Move and tap an object. The host chooses the topmost matching
+transformed geometry. The tablet outlines its original bounding rectangle
+through the full affine transform, preserving rotation, mirroring and shear.
+The border is 4 dp blue with a white contrast outline. Corner double-arrow icons
+and a curved-arrow rotation handle have 48 dp pen hit targets.
 
 - Move: drag inside the selected bounds.
-- Rotate: choose Rotate and drag around the bounds' center.
-- Resize: choose Resize and drag to adjust width and height independently.
-- Mirror H / Mirror V: reflect the selected object around its bounds' center.
+- Rotate: drag the curved-arrow handle, or choose Rotate and drag around the frame's center.
+- Resize: drag any corner; its opposite stays fixed and scaling follows the
+  object's local axes. Choosing Resize also permits dragging inside the frame,
+  using the original bottom-right corner and opposite top-left anchor.
+- Mirror H / Mirror V: reflect the selected object around its frame's center.
 - Deselect: remove the tablet selection.
 
 Edits compose with the existing affine matrix while retaining original points
-and payloads. The tablet previews a bounding frame during a drag; the PC object
-updates on pen-up. Each committed edit is undoable.
+and payloads. Hover cursors indicate move, rotation or the current resize
+direction where supported by the tablet. The rotation handle stays within the
+viewport even near its edges.
+
+The tablet previews the oriented frame during a drag and retains that pose
+until acknowledgement; the PC object updates on pen-up. A rejected edit restores
+the acknowledged frame. Each committed edit is undoable.
 
 Selection is single-object and is cleared by history/source/session changes.
 It is a client interaction state, not persistent document metadata.

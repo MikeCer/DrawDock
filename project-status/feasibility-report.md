@@ -14,11 +14,58 @@ at [docs](../docs/README.md).
   `NVTCapacitivePen` with pressure/tilt axes.
 - Three outputs enumerate at 2560x1440: primary `\\.\DISPLAY2` at `(0,0)`,
   `\\.\DISPLAY3` at `(-2534,1440)` and `\\.\DISPLAY1` at `(1306,1440)`.
-- Latest validation: 44 ordinary Rust tests and 25 Android tests pass; both
+- Latest validation: 45 ordinary Rust tests and 31 Android tests pass; both
   applications build, Android lint passes, and Rust formatting/strict Clippy pass.
-- The two explicit native integration tests pass, including the expanded
-  authenticated editor/scene checks described below. Interactive physical pen
-  and fullscreen acceptance are not implied by those results.
+- The native TLS editor/reconnect integration passes, including oriented image
+  selection and physical rotated PNG pixel checks. Earlier video integration
+  results are recorded below. Interactive physical pen and fullscreen acceptance
+  are not implied by those results.
+
+## Rotating selection and pen handles
+
+**Automated and on-device synthetic stylus checks: PASS. Physical pen ergonomics
+and hover: PARTIAL.**
+
+Selection acknowledgements now include pre-transform bounds. Android maps their
+four corners through the object's full affine matrix instead of transforming an
+already axis-aligned bounding box. The outline retains its angle during a drag,
+while awaiting acknowledgement and after reselection.
+
+The tablet uses a 4 dp blue border with a white contrast outline, double-arrow
+corner controls and a curved-arrow rotation handle. Controls have 48 dp pen
+targets; hover cursors reflect rotation and resize direction where the tablet
+supports app cursors. Corner resizing follows local axes and fixes the opposite
+corner, including after rotation, mirroring and shear. Small selections retain
+a central move target.
+
+Validation:
+
+- 45 ordinary Rust tests and 31 Android tests pass, including oriented-corner
+  acknowledgement, all resize anchors under rotation/mirror/shear, pen hit
+  targets, viewport clamping and degenerate selection cases.
+- Native pinned-TLS integration verifies original bounds survive an image
+  transform/reselection and samples rotated PNG pixels on the Windows desktop.
+- Host/APK builds, Rust formatting/strict Clippy and Android lint pass.
+- Updated APK installed and launched through ADB. After the owner unlocked the
+  tablet, synthetic stylus gestures against the remembered, pinned-TLS host
+  passed five screenshot-based checks on the actual 2560x1600 tablet (density
+  2; 2510x1412 mirrored workspace): initial selection, approximately 45-degree
+  rotation after acknowledgement, deselection/reselection retaining the angle,
+  rotated corner resizing with its opposite anchor fixed, and resizing from
+  23 dp outside the handle center (beyond the visible 14 dp radius).
+- Pixel checks matched all four oriented border edges; masked screenshots also
+  showed the curved-arrow rotation control and directional double-arrow corner
+  icons. The helper script, geometry results and privacy-masked screenshots are
+  retained as session artifacts, not application source.
+- Android's ADB `input` command does not offer hover-event injection. Actual
+  hardware-pen hover cursor presentation and hands-on ergonomics remain
+  unverified; synthetic contact events are not proof of those behaviors.
+- The test tablet was disconnected, the host confirmed its synthetic
+  annotations were cleared, and the temporary test host was stopped.
+
+The host and APK must be updated together because selection editing now
+requires the additive `local_bounds` response field. No production host was
+left running by these tests.
 
 ## Pen radial menu and expanded drawing toolkit
 

@@ -95,6 +95,7 @@ pub struct Bounds {
 pub struct Selection {
     pub id: u64,
     pub bounds: Bounds,
+    pub local_bounds: Bounds,
     pub transform: Transform,
 }
 
@@ -596,7 +597,15 @@ fn arrow_heads(object: &InkObject, aspect: f32) -> [Point; 2] {
 }
 
 fn selection(o: &InkObject, aspect: f32) -> Selection {
-    let b = geometry_bounds(o, aspect);
+    let mut b = geometry_bounds(o, aspect);
+    if o.tool == Tool::Arrow {
+        for p in arrow_heads(o, aspect) {
+            b.left = b.left.min(p.x);
+            b.right = b.right.max(p.x);
+            b.top = b.top.min(p.y);
+            b.bottom = b.bottom.max(p.y);
+        }
+    }
     if matches!(o.tool, Tool::Ellipse | Tool::Circle) {
         let center = o.transform.apply(Point {
             x: (b.left + b.right) / 2.0,
@@ -609,6 +618,7 @@ fn selection(o: &InkObject, aspect: f32) -> Selection {
         return Selection {
             id: o.id,
             transform: o.transform,
+            local_bounds: b,
             bounds: Bounds {
                 left: center.x - dx,
                 right: center.x + dx,
@@ -665,6 +675,7 @@ fn selection(o: &InkObject, aspect: f32) -> Selection {
     Selection {
         id: o.id,
         bounds: out,
+        local_bounds: b,
         transform: o.transform,
     }
 }
@@ -916,6 +927,40 @@ mod tests {
     }
 
     #[test]
+    fn selection_retains_local_frame_across_rotation_and_reselection() {
+        let aspect = 2.0;
+        let angle = 0.6f32;
+        let transform = Transform {
+            a: angle.cos(),
+            b: angle.sin() * aspect,
+            c: -angle.sin() / aspect,
+            d: angle.cos(),
+            tx: 0.2,
+            ty: -0.1,
+        };
+        for tool in [Tool::Rectangle, Tool::Image, Tool::Ellipse, Tool::Circle] {
+            let mut object = shape(tool);
+            let local = geometry_bounds(&object, aspect);
+            object.transform = transform;
+            let selected = selection(&object, aspect);
+            assert_eq!(selected.local_bounds, local);
+            assert_ne!(selected.bounds, local);
+            let corner = transform.apply(Point {
+                x: local.left,
+                y: local.top,
+            });
+            let serialized_corner = selected.transform.apply(Point {
+                x: selected.local_bounds.left,
+                y: selected.local_bounds.top,
+            });
+            assert_eq!(corner, serialized_corner);
+            assert_eq!(selected, selection(&object, aspect));
+            object.transform = Transform::default();
+            assert_eq!(selection(&object, aspect).local_bounds, local);
+        }
+    }
+
+    #[test]
     fn absolute_transforms_are_reversible_and_selection_uses_transformed_vertices() {
         let mut scene = Scene::default();
         let object = shape(Tool::Line);
@@ -1015,8 +1060,10 @@ mod tests {
         arrow.points = vec![Point { x: 0.4, y: 0.5 }, Point { x: 0.41, y: 0.5 }];
         arrow.style.width = 0.08;
         let head = arrow_heads(&arrow, 2.0)[0];
-        let bounds = selection(&arrow, 2.0).bounds;
+        let selected = selection(&arrow, 2.0);
+        let bounds = selected.bounds;
         assert!(bounds.left < 0.4 && bounds.bottom > 0.5);
+        assert_eq!(selected.local_bounds, bounds);
         let mut scene = Scene::default();
         scene.commit(arrow).unwrap();
         assert!(scene.select(head, 2.0).unwrap().is_some());
