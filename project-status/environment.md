@@ -1,5 +1,8 @@
 # DrawDock environment inventory
 
+Machine-specific discovery record. General setup instructions are in the
+[development guide](../docs/development.md).
+
 Discovery date: 2026-11-04. This inventory records the system as observed during
 the initial W0 inspection; device and display state may change.
 

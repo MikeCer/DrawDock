@@ -1,171 +1,273 @@
-# DrawDock protocol status
+# Protocol specification
 
-The W2 host/client implement one authenticated TLS/TCP connection on port 47831
-for pairing, control, pointer events and annotation commits. A second pinned
-TLS connection on the same port carries video, so USB still needs only one ADB
-reverse mapping. The host generates
-a current-user DPAPI-protected, persistent TLS identity and displays a QR invitation containing its
-SHA-256 fingerprint and a single-use 128-bit token with a five-minute expiry.
-The Android client pins the scanned certificate fingerprint before sending
-the token; the host requires explicit approval in a native Windows dialog.
-Manual entry and explicitly requested USB/ADB invitation delivery remain
-available. No unverified-TLS bootstrap or short-code bearer authentication is
-used.
+The control protocol is version **2**, implemented by
+`apps\dd-host\src\session.rs` and Android `SessionClient`.
+It uses authenticated TLS/TCP, with separate control and video connections on
+the same listener (default `127.0.0.1:47831`). ADB is transport only; it does not
+replace TLS or DrawDock authentication.
 
-QR invitations have the exact form
-`drawdock://pair?v=1&host=<IP>&port=<port>&fingerprint=<64 hex>&token=<32 hex>`.
-Only private/loopback numeric IP endpoints and the five specified unique fields
-are accepted by the scanner. The host's expiry is authoritative; no synchronized
-tablet clock is needed. The invitation is not a general-purpose deep link and
-scanning does not grant remote input until the PC approves.
+## Framing and authentication
 
-On first approval, `paired.remembered_device` contains a random 128-bit device
-ID and independent 256-bit reconnect credential. Android saves the endpoint,
-pin and credential encrypted with an Android Keystore AES-GCM key. The host
-persists only the credential's SHA-256 digest alongside the stable TLS identity,
-inside its DPAPI-protected registry.
+Control messages are UTF-8 JSON followed by LF. Keep each complete frame within
+64 KiB, including its terminator. Numeric coordinates must be finite.
 
-Subsequent control connections verify the saved certificate pin and send
-`{"type":"resume","device_id":...,"token":...}` instead of `pair`. A recognized,
-unrevoked credential receives the normal `paired` response without a local
-approval prompt; `remembered_device` is null (the saved credential is unchanged).
-Every connection still receives a fresh video credential and repeats video
-geometry readiness. The host resets pointer state/mode and clears the scene
-after each session, but keeps its listener and trust registry for reconnects.
-Authentication failures are bounded to three per ten-second window.
-
-Frames are newline-delimited JSON and limited to 64 KiB. Large annotation
-objects use ordered 48 KiB base64 chunks, a 512 KiB transaction limit and a
-SHA-256 digest. The client queue and pending-stroke budget are bounded. Pointer
-coordinates are normalized to the selected monitor; moves carry a generation
-and may be coalesced, while button transitions are kept ordered. Android spaces
-session frames by at least 12.5 ms (at most 80 frames/second), including chunked
-commits and heartbeats, below the unchanged host guard of 120 messages/second.
-The writer waits before dequeuing so new motion can replace the pending sample
-even on a fast USB link. Down/up/cancel and mode/control barriers remain ordered;
-one queue slot is reserved for release. Stalls do not accumulate catch-up credit.
-A 1.5-second
-read lease closes idle/disconnected sessions, releases any held host mouse
-button and clears session annotations.
-
-The single **Clear** control clears both tablet and PC annotations when connected.
-It cancels active input, sends `clear_display` with a request ID, and pauses input
-until `clear_ack` arrives before clearing the tablet preview. A five-second
-timeout reports an unknown PC state rather than success. When disconnected,
-Clear removes only local marks and explicitly reports that no PC is connected.
-The host rebuilds every frame on a transparent surface so clear/undo remove old
-pixels rather than drawing over the previous frame. Host tests cover this
-redraw, but physical-display clearing still requires manual verification.
-
-Freehand/highlighter commits contain all samples; polygon/polyline commits
-preserve their vertices. Arrow, line, rectangle, circle and ellipse commits
-contain exactly two bounding/drag endpoints. Android regression tests cover
-both drag directions and vertex preservation.
-
-The host defaults to loopback and accepts only explicitly selected private or
-loopback addresses. Wi-Fi has not been tested; no wildcard/public listener,
-firewall change, certificate bypass or automatic elevation is used. For the
-USB workflow, use the loopback listener and ADB reverse port 47831. The launcher
-cleans up mappings it creates after the host stops; externally created mappings
-remain the owner's responsibility.
-
-Protocol version 2 sends the enumerated monitor list, selected monitor/geometry
-epoch and an independent 128-bit video credential in the approved `paired`
-response. The video connection authenticates with `{"type":"video","token":...}`
-after verifying the same certificate pin. It cannot grant control access.
-Its packets are `kind:u8 | epoch:u64-BE | length:u32-BE | payload`, bounded to
-8 MiB. Kind 1 is JSON H.264 configuration (bounded to 64 KiB), kind 2 is a
-complete Annex-B access unit, and kind 3 reports failure. SPS/PPS and IDR frames
-are repeated; no dependent encoded frame is silently dropped.
-
-The capture path remains the installed native Windows FFmpeg gdigrab process,
-controlled and cleaned up by Rust. It now preserves up to 2560x1440 at a
-requested 30 fps, without upscaling small sources, using Lanczos scaling and
-explicit limited-range BT.709 conversion/signaling. H.264 High level 5.0 retains
-4:2:0 Android compatibility. B-frames and encoder lookahead remain disabled.
-Video configuration reports the selected encoder and color space.
-
-The machine-specific launcher defaults to `h264_nvenc` (RTX 3080 Ti verified):
-P5/ultra-low-latency, CQ 18, VBR 12 Mbit/s target, 24 Mbit/s maximum, 2-Mbit VBV.
-Direct host CLI defaults to software `libx264`: veryfast/zerolatency, CRF 18,
-the same maximum/VBV, four threads. `--video-encoder software|nvenc` explicitly
-selects either; an unavailable encoder fails visibly rather than silently
-changing quality or hardware requirements.
-
-A one-access-unit pending queue and 500-ms socket write timeout remain bounded.
-The reader tolerates pipe batches by waiting up to 100 ms for that same slot,
-preserving all dependent frames in order; a prolonged stall closes video and
-requires reconnecting from a fresh keyframe. Shutdown cancels that wait.
-Android validates even dimensions/rate, selects a decoder supporting the format,
-checks its advertised size/rate capability, and uses the negotiated frame rate
-for timestamps. High bitrate/Wi-Fi behavior and physical decoder playback still
-require acceptance; this is not a measured input-to-photon latency claim.
-
-`select_source` carries a source name, request ID and current `source_epoch`.
-The host validates the output, releases buttons, resets any in-flight commit,
-retains scenes per monitor for this session, and increments the epoch. The
-overlay moves to that physical output and the encoder restarts with a fresh
-configuration/keyframe. Android cancels contact and fits video and ink to the
-same aspect-preserving rectangle. Input stays suspended until a decoded frame
-for that epoch is rendered and `source_ready` / `source_ready_ack` completes.
-All scene/pointer commands carry their enqueue-time epoch; stale geometry is
-rejected. Output removal/geometry changes require reconnection.
-
-The current capture contract is INCLUDED: Android shows only active provisional
-pen ink over video, not another copy of committed host objects. On pen-up,
-provisional ink hands off immediately to captured authoritative ink. This avoids
-indefinite double ink but can show a short handoff gap; a conservative
-presentation/capture revision watermark is **not implemented**. Reconciliation
-and physical visual acceptance remain **BLOCKED**, not passed.
-
-Ports 47832 and 47833 are unused. QUIC/UDP is **DEFERRED**.
-
-## Drawing/editor extensions
-
-The same authenticated, paced, epoch-scoped control channel now supports
-`line`, `circle`, `polygon`, `polyline`, `text`, `image` and `highlighter` objects
-alongside the original tools. Optional `text`, `image_data` (raw base64 PNG)
-and `transform` fields extend `InkObject`; absent transform means identity.
-Text uses normalized `style.width` as font size and is limited to 2048 UTF-8
-bytes/eight lines. Images are limited to 320 KiB compressed and 1280x1280
-decoded, with bounded decode allocation. Payload sizes count toward existing
-scene/history budgets and the 512 KiB chunked-commit limit. Image import does
-not add host clipboard/file access or a new network endpoint.
-
-Transforms use normalized affine coordinates:
-`x' = a*x + c*y + tx`, `y' = b*x + d*y + ty`. Coefficients must be finite,
-bounded and nonsingular. Edits replace an object's absolute transform and add
-one undo state. Rendering converts this matrix to physical monitor geometry
-before drawing; rotating a wide monitor does not stretch shapes.
-
-New commands carry `request_id` and `source_epoch`:
+The client verifies the host's exact SHA-256 certificate pin before sending an
+invitation or remembered credential. The first message is one of these templates:
 
 ```json
-{"type":"select_object","x":0.5,"y":0.5,"request_id":1000000001,"source_epoch":1}
-{"type":"transform_object","object_id":42,"transform":{"a":1,"b":0,"c":0,"d":1,"tx":0.1,"ty":0},"request_id":1000000002,"source_epoch":1}
-{"type":"set_canvas","blackboard":true,"grid":true,"request_id":1000000003,"source_epoch":1}
+{"type":"pair","token":"<32-hex invitation token>","client":"<device label>"}
+{"type":"resume","device_id":"<32-hex device ID>","token":"<64-hex reconnect credential>","client":"<device label>"}
 ```
 
-`editor_ack` includes the request/epoch, `canvas:{blackboard,grid}`, `mode`,
-and `selection:null` or `{id,bounds:{left,top,right,bottom},transform:{...}}`.
-Bounds describe the transformed normalized object. Errors correlate their
-request and epoch so the client does not retain an indefinite pending edit.
-Clear/history acknowledgements and `source_ready_ack` also report canvas/mode.
-Blackboard forces Draw and prohibits Pointer mode, including when undo restores
-it. Clear atomically resets objects and canvas, with undo restoring both.
+New pairing requires an open, unexpired, single-use invitation and native PC
+approval. Resume requires a recognized, unrevoked credential. Authentication
+failure returns `authentication_failed` with a message and closes that attempt.
 
-Laser messages use
-`{"type":"laser","active":true,"x":0.5,"y":0.5,"rgba":[255,0,0,255],"source_epoch":1}`.
-They are transient, coalesced without crossing stops/source/control barriers,
-and do not add undo entries or a per-sample acknowledgement. Android refreshes
-the current point every 100 ms while contacting/hovering; the host expires it
-after roughly 300 ms without a refresh and invalidates the overlay. Menu open,
-cancellation, source changes and disconnect stop the laser.
+Successful authentication returns:
 
-The native presenter uses resvg with locally installed Windows fonts for
-escaped plain text, SVG-generated paths, affine edits, correctly composited
-highlighter strokes and validated PNG images. It accepts no user-supplied SVG.
-Every redraw starts from a transparent framebuffer, or the selected blackboard,
-and writes premultiplied BGRA to the layered window. All content is authoritative
-on the PC and therefore included in monitor video; no independent tablet-only
-background or image is presented as remote success.
+```json
+{
+  "type": "paired",
+  "version": 2,
+  "sources": [
+    {"name":"\\\\.\\DISPLAY2","left":0,"top":0,"right":2560,"bottom":1440,"primary":true}
+  ],
+  "selected": {
+    "source":{"name":"\\\\.\\DISPLAY2","left":0,"top":0,"right":2560,"bottom":1440,"primary":true},
+    "source_epoch":1
+  },
+  "video_token":"<fresh 32-hex session video token>",
+  "remembered_device":{"id":"<device ID>","token":"<reconnect credential>"}
+}
+```
+
+`remembered_device` is supplied on enrollment and is `null` on resume.
+Source bounds are physical Windows virtual-desktop coordinates; negative origins
+are valid. Initial mode is Draw. Trust persists independently of scene/session
+state. See [pairing and threat model](pairing-and-threat-model.md).
+
+## Epochs and readiness
+
+Every non-heartbeat command carries its enqueue-time `source_epoch`, including
+source selection and commit chunks. The host rejects a missing/stale epoch.
+Do not retag already queued coordinates with a new epoch.
+
+`select_source` carries `source`, `request_id` and the current epoch:
+
+```json
+{"type":"select_source","source":"\\\\.\\DISPLAY2","request_id":1,"source_epoch":1}
+```
+
+The host releases buttons, cancels the transaction/laser, saves/restores that
+monitor's session scene, advances the epoch, relocates the overlay and restarts
+capture. It returns `source_selected` with `request_id`, `selected`, `canvas`
+and `mode`.
+
+After rendering a video frame for the selected epoch, Android sends
+`{"type":"source_ready","source_epoch":2}`. The host replies with
+`source_ready_ack`, that epoch, `canvas` and `mode`.
+Pointer, editing, scene/history, Clear and mode commands are suspended until
+readiness. Video failure revokes readiness; output removal/geometry change
+requires reconnection.
+
+`{"type":"heartbeat"}` carries no coordinates or epoch and receives no response.
+The client sends it when idle to maintain the control lease.
+
+## Annotation objects
+
+Example direct commit:
+
+```json
+{
+  "type":"commit",
+  "source_epoch":1,
+  "object":{
+    "id":42,
+    "tool":"rectangle",
+    "style":{"rgba":[255,0,0,255],"width":0.004},
+    "points":[{"x":0.2,"y":0.2},{"x":0.6,"y":0.5}]
+  }
+}
+```
+
+| Field | Contract |
+|---|---|
+| `id` | Unsigned 64-bit identifier, unique in the scene |
+| `tool` | `freehand`, `highlighter`, `line`, `arrow`, `rectangle`, `circle`, `ellipse`, `polygon`, `polyline`, `text`, `image` |
+| `style.rgba` | Four unsigned bytes, red/green/blue/alpha |
+| `style.width` | Finite normalized width, greater than zero and at most 0.2; relative to the shorter source edge |
+| `points` | Original normalized XY geometry in `[0,1]` |
+| `transform` | Optional affine matrix; absent means identity |
+| `text` | Required for text; nonblank, at most 2048 UTF-8 bytes/eight lines, with permitted newline/tab controls |
+| `image_data` | Required for images; canonical base64 PNG without a data-URI prefix |
+
+Freehand/highlighter preserve all samples, including a single-point dot.
+Polyline needs at least two vertices; polygon needs at least three. Other tools
+use exactly two endpoints/bounding corners. Text width is interpreted as font
+size. Images/text occupy their bounding rectangle. Circles account for physical
+source aspect ratio.
+
+The host validates PNG signature, complete decoding/end, canonical base64,
+dimensions and allocation bounds, and rejects animated PNG. It does not accept
+arbitrary image paths, remote URLs or user-supplied SVG.
+
+Successful direct commits return `{"type":"ack"}`. This acknowledgement does not
+identify a rendered video frame or establish physical presentation.
+
+## Large commits
+
+Use an ordered transaction when object JSON does not fit a control frame:
+
+| Command | Fields in addition to `source_epoch` |
+|---|---|
+| `begin_commit` | `object_id`, `total_bytes`, `digest` (64-hex SHA-256 of exact object JSON bytes) |
+| `commit_chunk` | `object_id`, zero-based byte `offset`, base64 `data` |
+| `finish_commit` | `object_id` |
+| `cancel_commit` | No additional fields |
+
+There is one active transaction per session. Chunks must be nonempty and
+contiguous, match the object ID and stay within the declared length. Finish
+checks total length, digest, parsed object ID and ordinary scene validation
+before committing atomically. Invalid ordering/bounds discard the transaction.
+Expiry discards it; source changes and session teardown cancel it.
+Each successful transaction command returns `ack`.
+
+The host decoded-chunk bound is 48 KiB, but JSON/base64 overhead must still fit
+the frame limit. Android sends **36 KiB raw chunks**, producing 48 KiB of base64
+plus JSON overhead.
+
+## Editing and canvas
+
+These commands require `request_id` and `source_epoch`:
+
+| Type | Additional fields | Effect |
+|---|---|---|
+| `select_object` | Normalized `x`, `y` | Topmost transformed bounding-box selection |
+| `transform_object` | `object_id`, absolute `transform` | One undoable affine edit |
+| `set_canvas` | Boolean `blackboard`, `grid` | One undoable canvas change; releases buttons |
+
+A transform is `{a,b,c,d,tx,ty}`:
+
+```text
+x' = a*x + c*y + tx
+y' = b*x + d*y + ty
+```
+
+Coefficients are finite with absolute value at most 16; translation components
+are finite with absolute value at most 4. The determinant's absolute value
+must be at least 0.0001. To render on a `W` by `H` physical source, use
+SVG matrix `(a, b*H/W, c*W/H, d, tx*W, ty*H)`.
+
+Responses have this shape (`selection` can be `null`):
+
+```json
+{
+  "type":"editor_ack",
+  "request_id":1000000001,
+  "source_epoch":1,
+  "selection":{
+    "id":42,
+    "bounds":{"left":0.2,"top":0.2,"right":0.6,"bottom":0.5},
+    "transform":{"a":1,"b":0,"c":0,"d":1,"tx":0,"ty":0}
+  },
+  "canvas":{"blackboard":false,"grid":false},
+  "mode":"draw"
+}
+```
+
+Bounds are the transformed normalized selection bounds. Canvas changes return
+null selection. Blackboard forces Draw, and Pointer mode is prohibited while
+it is active, including when restored by Undo.
+
+## Modes, pointer and history
+
+`set_mode` supplies `mode: "draw" | "pointer"` and a monotonically increasing
+`request_id`. It releases held buttons and returns `mode_ack` with mode and ID.
+Annotation commits, selection/transforms and laser require Draw mode.
+
+Pointer messages require Pointer mode:
+
+```json
+{"type":"pointer","action":"down","generation":1,"x":0.5,"y":0.5,"button":"left","source_epoch":1}
+```
+
+Actions are `hover`, `move`, `down`, `up`, `cancel`; buttons are `left` or
+`right` (missing/empty defaults left). Down starts a strictly newer generation;
+motion/release must match the active or last applicable generation. Overlapping
+downs and stale transitions are rejected. Cancellation with no active button
+is harmless. Applied pointer messages can return generic `ack`; clients must
+not require an acknowledgement for every motion.
+
+`undo`, `redo` and legacy `clear` return `ack` with epoch, canvas and mode.
+`clear_display` requires a positive `request_id` and returns `clear_ack` with
+that ID and the same state fields. Clear atomically removes objects, resets
+blackboard/grid and clears laser; Undo can restore objects/canvas, not laser.
+History/Clear operations release buttons.
+
+## Laser
+
+```json
+{"type":"laser","active":true,"x":0.5,"y":0.5,"rgba":[255,0,0,255],"source_epoch":1}
+```
+
+Active laser requires normalized coordinates; absent color defaults red.
+`active:false` stops it. There is no per-sample acknowledgement or history
+entry. Android refreshes at 100-ms intervals, and the host expires the point
+after 300 ms without refresh. Coalescing must preserve stops and control/source
+barriers.
+
+## Errors and ordering
+
+Command rejection returns `error` with `message`, `request_id` and `source_epoch`
+copied from the request (unprovided values are null). Semantic command errors
+are reported without claiming mutation succeeded. Framing, rate, lease and
+transport failures end the session.
+
+Android spaces every control frame by at least 12.5 ms, including transaction
+chunks and heartbeats. Pending motion coalesces only across compatible adjacent
+samples. Preserve button transitions, laser stops, source epochs and control
+barriers. One queue slot is reserved for release; stalls do not grant catch-up
+burst credit.
+
+## Video connection
+
+The second connection verifies the same certificate pin, then sends:
+
+```json
+{"type":"video","token":"<fresh video_token from paired>"}
+```
+
+Video authentication has a 30-second window and three-attempt limit. It does not
+authorize control. The authenticated connection switches to binary packets:
+
+| Header field | Encoding |
+|---|---|
+| Kind | Unsigned byte |
+| Source epoch | Unsigned 64-bit big-endian |
+| Payload length | Unsigned 32-bit big-endian |
+| Payload | Exactly the indicated byte count |
+
+Kind 1 contains configuration JSON (`codec`, `width`, `height`, `fps`, `source`,
+`annotation_capture_mode`, `encoder`, `color_space`); Android bounds it to 64 KiB.
+Kind 2 contains a complete H.264 Annex-B access unit, including startup
+SPS/PPS/IDR. Kind 3 contains a UTF-8 error message; the host uses epoch zero for
+that failure packet. Packet payloads are nonempty and bounded to 8 MiB.
+See [video streaming](video-streaming.md) for codec and queue configuration.
+
+## Resource limits
+
+| Resource | Bound |
+|---|---|
+| Control frame | 64 KiB including newline on host |
+| Serialized transaction/object | 512 KiB transaction; direct messages must fit a frame |
+| Transaction lifetime | 3 seconds |
+| Control traffic | Host guard: 120 messages/second; Android pacing: at most 80 frames/second |
+| Control read lease | 1.5 seconds |
+| Objects / points | 2,000 objects; 20,000 points/object; 200,000 points/scene |
+| Scene estimated storage | 8 MiB, including text/base64 payloads |
+| Each undo/redo stack | 32 snapshots and 8 MiB estimated storage |
+| PNG | 320 KiB compressed; at most 1280x1280; 16 MiB decode-allocation bound |
+| Android pending mark budget | 8 MiB; normal queue 128 entries plus reserved release slot |
+| Video access unit | 8 MiB |
+
+Keep Rust validation, Kotlin encoding and tests aligned when changing a bound.

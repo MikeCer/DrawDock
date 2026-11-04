@@ -1,132 +1,140 @@
-# Build and run the Windows host
+# Windows host
 
-For the already-built host and connected USB tablet, run the launcher from
-PowerShell:
+Run commands from the repository root in PowerShell. Complete the
+[development setup](development.md) first.
 
-```powershell
-E:\dev\DrawDock\Start-DrawDockHost.ps1 -Restart
-```
-
-It validates the selected display and authorized tablet, stops only this
-workspace's existing host when `-Restart` is supplied, configures ADB reverse
-and starts a fresh loopback-only host. For first pairing, choose
-**Connect > Scan QR**, then approve remembering the tablet in the PC dialog.
-Subsequent **Connect** actions reuse saved trust without another QR/approval.
-Press **Ctrl+C**
-in the script's console to stop. Only USB forwarding created by the script is
-removed on exit; pre-existing mappings are preserved. No firewall, elevation
-or execution-policy changes are made.
-
-The defaults match the current system (`\\.\DISPLAY2`, port 47831, tablet
-`cfa3e5dce217`). Override them with `-Output`, `-Port`, `-DeviceSerial` or
-`-AdbPath`. Use `-WhatIf -Restart` for a read-only preflight. If PowerShell blocks
-the script under your execution policy, review your organization's approved
-script-running procedure; the launcher does not bypass that policy.
-
-Video now uses up to 2560x1440 at 30 fps. This machine's launcher defaults to
-NVIDIA NVENC, verified on its RTX 3080 Ti; no SDK or driver was installed.
-For another GPU or an unavailable NVENC session, explicitly select software:
+## Build and choose an output
 
 ```powershell
-E:\dev\DrawDock\Start-DrawDockHost.ps1 -Restart -VideoEncoder software
-& .\target\debug\dd-host.exe video-probe --output '\\.\DISPLAY2' --video-encoder nvenc
+cargo build -p dd-host
+& .\target\debug\dd-host.exe outputs
 ```
 
-Direct `dd-host serve` defaults to software; add `--video-encoder nvenc` for
-hardware encoding. There is no silent runtime fallback. Rebuild/update the
-Android APK as well: the older decoder deliberately rejects video above 720p.
-Saved pairing credentials are unaffected. High-quality video may use up to
-24 Mbit/s; Wi-Fi/thermal/long-running acceptance is still outstanding.
+Select an exact device name printed by `outputs`; examples below use
+`\\.\DISPLAY2`. Enumerate again after changing monitors, display modes or DPI
+configuration rather than copying another machine's geometry.
 
-Run these commands from PowerShell in `E:\dev\DrawDock`. They load the existing
-Visual Studio 2026 x64 environment only in the current child process; they do not
-modify system settings or install software.
+## USB launcher
+
+Connect and authorize the tablet in ADB. Set your paths/device explicitly:
 
 ```powershell
-$vcvars = 'D:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvars64.bat'
-$env:PATH += ';C:\Program Files (x86)\Microsoft Visual Studio\Installer'
-$cmd = "call `"$vcvars`" >nul && cd /d E:\dev\DrawDock && cargo fmt --all -- --check && cargo test --workspace"
-& $env:ComSpec /c $cmd
+$adb = 'C:\Path\To\Android\Sdk\platform-tools\adb.exe'
+& $adb devices -l
+$serial = '<authorized-device-serial>'
+$output = '\\.\DISPLAY2'
+
+.\Start-DrawDockHost.ps1 -Output $output -DeviceSerial $serial `
+    -AdbPath $adb -VideoEncoder software
 ```
 
-Enumerate the current outputs and generate a local doctor report:
+The script validates the output/device, checks existing mappings and starts the
+debug host on loopback. It refuses to overwrite a conflicting reverse mapping.
+Ctrl+C stops the foreground host; cleanup removes only forwarding created by
+that invocation.
+
+The script contains machine-specific defaults for output, serial and ADB path,
+and defaults to NVENC. Override them for your environment. Use
+`-VideoEncoder nvenc` only with a compatible encoder.
+
+| Option | Behavior |
+|---|---|
+| `-Output` | Selected Windows output device name |
+| `-Port` | Control/video TCP port; default 47831 |
+| `-DeviceSerial` / `-AdbPath` | Explicit ADB target and executable |
+| `-VideoEncoder software\|nvenc` | Encoder selection; no silent fallback |
+| `-Restart` | Stop only hosts using this workspace's debug executable, then restart |
+| `-Pair` | Open an invitation for new enrollment even with remembered devices |
+| `-WhatIf` | Read-only preflight without process/mapping changes |
+
+Restart ends the active session and its drawings. Use `-Restart -Pair` when
+enrolling another tablet or replacing a forgotten/revoked credential. The
+launcher does not change firewall, elevation or PowerShell execution policy.
+
+## Direct CLI
+
+For manual transport setup, manage the ADB reverse mapping as described in
+[Android and ADB](run-android-and-adb.md#usb-forwarding).
+Direct CLI uses software encoding unless explicitly overridden:
 
 ```powershell
-$cmd = "call `"$vcvars`" >nul && cd /d E:\dev\DrawDock && cargo run -p dd-host -- outputs"
-& $env:ComSpec /c $cmd
-$cmd = "call `"$vcvars`" >nul && cd /d E:\dev\DrawDock && cargo run -p dd-host -- doctor --output reports\doctor.json"
-& $env:ComSpec /c $cmd
+& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
+    --listen 127.0.0.1 --port 47831 --video-encoder software
 ```
 
-Choose the exact device name printed by `outputs`; the default demo deliberately
-requires explicit output selection:
+| Command | Purpose |
+|---|---|
+| `outputs` | Enumerate output names, physical dimensions and origins |
+| `doctor [--output <path>]` | Print/write a diagnostic JSON snapshot |
+| `overlay-demo --output <name>` | Display the built-in annotation scene without a network session |
+| `replay <fixture> --output <name>` | Render a validated JSON scene |
+| `video-probe --output <name> [--video-encoder software\|nvenc]` | Capture/encode a bounded frame probe without saving a recording |
+| `serve --output <name>` | Start overlay, pairing/control and video services |
+| `devices list` / `devices revoke <id>` | Manage remembered devices while the host is stopped |
+
+`serve` also accepts `--listen`, `--port`, `--pair`, `--pairing-info <new-path>`
+and `--video-encoder`. Public/wildcard addresses and port zero are rejected.
+
+Replay and diagnostics:
 
 ```powershell
-$cmd = "call `"$vcvars`" >nul && cd /d E:\dev\DrawDock && cargo run -p dd-host -- replay tests\fixtures\basic-scene.json --output '\\.\DISPLAY2'"
-& $env:ComSpec /c $cmd
+& .\target\debug\dd-host.exe replay .\tests\fixtures\basic-scene.json `
+    --output '\\.\DISPLAY2'
+# Stop the replay with Ctrl+C before the next command.
+& .\target\debug\dd-host.exe doctor --output .\project-status\doctor.json
 ```
 
-Replace `\\.\DISPLAY2` with the selected output from the first command. The demo
-is a click-through overlay with no controls; press **Ctrl+C** in that same host
-console to remove it. Manually verify that the underlying application continues
-to animate, receives clicks through painted ink, retains focus/keyboard input,
-and shows all four shapes. Separately test an actual fullscreen slideshow. These
-manual results must be recorded; build or unit-test success is not a substitute.
+Replay uses the same native presenter, without opening a network listener.
+Diagnostic output is a machine snapshot, not an interactive test result.
 
-The initial `doctor` output records implementation status, not a PASS for
-desktop interaction.
+## Private-network connections
 
-The mirroring backend uses the already-installed native FFmpeg 7.0
-gdigrab/libx264/NVENC executable. Rust controls its lifecycle; no Linux, Docker or
-system installation is needed. `DRAWDOCK_FFMPEG` can override its path. This
-installed build is GPL-enabled and is not redistributed with DrawDock; binary
-distribution/licensing review is still required before packaging dependencies.
-
-Capture/stream checks (no recording is saved):
+Choose a private IP actually assigned to the host interface. The USB launcher
+always uses loopback; use direct CLI for a private-network listener:
 
 ```powershell
-& .\target\debug\dd-host.exe video-probe --output '\\.\DISPLAY2'
-cargo test -p dd-host native_tls_video_authenticates_and_switches_monitors -- --ignored --nocapture
+# Replace this example address with your assigned private address.
+& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
+    --listen 192.168.1.10 --port 47831 --pair --video-encoder software
 ```
 
-The second command captures two real displays over locally authenticated TLS,
-with both x264 and NVENC, checking SPS/PPS/IDR startup and source switching;
-it requires two available outputs and NVIDIA NVENC and is excluded from ordinary
-unit-test runs. It is not a physical tablet playback or fullscreen test.
+Pair using the invitation for that endpoint. ADB reverse is not used for this
+connection. Android saves one endpoint, so switching from loopback/USB requires
+deliberate re-pairing. Follow your network/firewall policy; the application does
+not create an exception automatically.
 
-## Remembered tablets
+## Remembered devices
 
-The host retains its identity and trusted tablets in current-user DPAPI-encrypted
-`%LOCALAPPDATA%\DrawDock\trust.dpapi`. Do not delete this file to troubleshoot a
-connection: changing identity invalidates the tablet's saved pin. Corrupt or
-inaccessible state is reported explicitly, without silently replacing trust.
-No administrator access, firewall rule or system setting is involved.
-
-After upgrading both applications, pair once more to enroll a remembered
-credential. Afterwards the host stays listening across disconnects, and the
-tablet's **Connect** reuses its credential after app or host restart.
-To enroll another tablet (or re-pair after Forget PC):
-
-```powershell
-E:\dev\DrawDock\Start-DrawDockHost.ps1 -Restart -Pair
-```
-
-Stop the host before inspecting or revoking trust; the encrypted registry has an
-exclusive process lock. Listed device IDs are not authentication secrets:
+The registry and TLS identity are stored at
+`%LOCALAPPDATA%\DrawDock\trust.dpapi`. Do not delete it to fix a connection:
+replacing identity invalidates saved pins. Corrupt/inaccessible state is reported
+explicitly. Stop the host before administration because it holds an exclusive
+trust-store lock.
 
 ```powershell
 & .\target\debug\dd-host.exe devices list
 & .\target\debug\dd-host.exe devices revoke '<device-id-from-list>'
 ```
 
-Revocation rejects that device's subsequent reconnects while retaining the host
-certificate and other devices. Tablet **Forget PC** removes only the tablet copy.
-The host accepts one active tablet at a time.
+Listed IDs are not authentication secrets. Revocation rejects future resumes
+for that credential; it is not a request to interrupt a running session.
+Android Forget PC removes only its local saved copy.
 
-Actual native host reconnect/restart/revocation regression (isolated encrypted
-test store; no production enrollment or saved credentials are used):
+## Video configuration and troubleshooting
+
+Set a direct FFmpeg executable path if needed:
 
 ```powershell
-cargo build -p dd-host
-cargo test -p dd-host native_host_resumes_repeatedly_after_restart_and_rejects_revocation -- --ignored --nocapture
+$env:DRAWDOCK_FFMPEG = 'C:\Path\To\ffmpeg.exe'
+& .\target\debug\dd-host.exe video-probe --output '\\.\DISPLAY2' `
+    --video-encoder software
 ```
+
+See [video streaming](video-streaming.md) for codec support, defaults, queue
+limits and lifecycle, and [development](development.md#native-integration-checks)
+for native integration commands.
+
+If the output disappears or changes geometry, reconnect after re-enumerating.
+For NVENC failure, explicitly choose software or correct the encoder setup.
+For trust-lock errors, stop the other host using that registry. Do not recover
+from a pin mismatch by disabling validation.

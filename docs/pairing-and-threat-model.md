@@ -1,98 +1,115 @@
-# Pairing and threat-model status
+# Pairing and threat model
 
-## Remembered-device design
+## Trust and capabilities
 
-At the owner's request, persistent trust replaces the original ephemeral-only
-milestone policy. First pairing still requires the QR invitation, certificate
-pin check and explicit PC approval. Approval now enrolls a random device ID and
-a separate 256-bit reconnect credential, delivered only over that approved TLS
-connection. The host stores only its SHA-256 digest; subsequent connections
-prove possession over pinned TLS without another approval prompt.
+An approved tablet can view the selected monitor, annotate it and control the
+Windows mouse. The claimed client name is a display label, not an authenticated
+identity. The PC approval dialog names the granted capabilities and defaults
+to **No**.
 
-The host TLS certificate/private key and device registry are protected with
-Windows current-user DPAPI (`CryptProtectData`, UI forbidden), under
-`%LOCALAPPDATA%\DrawDock`. Writes replace the encrypted registry atomically.
-An exclusive state lock prevents concurrent hosts or revocation racing an active
-session; stop the host before managing remembered devices. Android stores the
-last PC endpoint, certificate pin and reconnect credential as AES-256-GCM
-ciphertext in private preferences, using a non-exportable Android Keystore key.
-Neither platform stores remembered credentials in plaintext; invitation tokens
-are not retained in either trust store.
-An unreadable/invalid store fails explicitly, never silently replacing trust.
+Control and video use pinned TLS. USB debugging authorization or access to a
+private network alone does not grant DrawDock access.
 
-Disconnecting or restarting either app does not revoke trust. Host device
-revocation rejects subsequent resumes; Android forgetting removes its local
-credential. New enrollment still needs an invitation (`--pair` / launcher
-`-Pair` when trusted devices already exist). TLS pin changes require deliberate
-re-pairing, not automatic trust-on-first-use. Sessions remain single-tablet,
-with bounded authentication attempts and the existing lease/input cleanup.
+## First pairing
 
-The host retains its DPAPI-protected TLS certificate and creates a cryptographically
-random 128-bit single-use invitation token when enrollment is enabled. A native
-Windows window displays a QR invitation
-containing the endpoint, full SHA-256 certificate fingerprint and token.
-Invitations expire after five minutes with at most three failed authentication
-attempts. Closing the QR window cancels pairing; pairing success closes it.
-Only the approved device credential and host identity are retained as described
-above; the invitation token/QR payload is not printed to logs.
+The host retains its TLS identity and generates a random 128-bit single-use
+invitation when enrollment is enabled. A native window displays:
 
-On the tablet, choose **Connect > Scan QR**, allow camera access if prompted,
-and scan the PC's window. The decoder is bundled (ZXing Android Embedded 4.3.0,
-Apache-2.0); it does not need a third-party scanner, Play Services download or
-an external pairing service. Confirm the displayed endpoint. The app rejects
-malformed/duplicate fields, unsupported versions, missing credentials and
-non-private/non-loopback IPs before connecting. DNS is not used when parsing QR
-invitations. The Android trust manager accepts only a certificate matching the
-scanned fingerprint, before sending the invitation token. No trust-on-first-use
-or certificate-validation bypass is introduced.
+```text
+drawdock://pair?v=1&host=<numeric-IP>&port=<port>&fingerprint=<64-hex-SHA256>&token=<32-hex-token>
+```
 
-After validating the invitation token, the PC shows a native **approve tablet**
-dialog with the claimed device name and peer endpoint. The name is not an
-authenticated identity. The default is **No**. Only explicit **Yes**, while the
-invitation remains open and unexpired, grants screen-viewing, annotation and
-pointer access. The approval dialog names these capabilities.
-Manual invitation entry remains available under **Manual invitation (advanced)**;
-the existing explicit USB/ADB invitation-intent path remains compatible.
+The Android scanner accepts only the version and five unique fields above,
+with a private/loopback numeric IP, valid port, full pin and invitation token.
+It rejects duplicate/unknown fields and does not resolve a DNS hostname.
+ZXing scanning is bundled; no external scanner or pairing service is required.
 
-Treat the QR as a secret invitation: scan it only from your own PC, never share
-its screenshot, and approve only the device you are pairing. QR replacement or
-social engineering is outside cryptographic certificate pinning. Tap **Connect**
-to reuse the last PC's encrypted credential. The host retains its TLS identity
-across restarts and keeps listening after disconnects. Closing/denying/expiry
-disables new enrollment, not remembered-device connections; restart with `--pair`
-to issue another invitation. A modal approval dialog may
-remain visible until dismissed after expiry, but expired approval cannot grant
-access.
+The client pins the scanned certificate before sending the token. The invitation
+expires after five minutes, permits at most three failed authentication attempts
+and requires explicit local approval. Closing the QR window, denial or expiry
+cannot approve a new tablet. An approval dialog left open past expiry cannot
+grant access. Success closes the invitation.
 
-The listener rejects public/unspecified addresses and defaults to loopback.
-An explicitly selected private IPv4 or local IPv6 bind is allowed, but Wi-Fi
-has not been exercised. The implementation uses one TLS connection for
-annotation/control/pointer messages. A separate pinned-TLS connection to the same
-port authenticates with a fresh 128-bit video credential delivered only inside
-the approved session. It cannot grant annotation/control access; wrong credentials
-are rejected before capture starts. Video authentication has a 30-second window,
-three-attempt limit and bounded handshake/write deadlines. The capture process
-and video service stop with the session. JSON frames are
-limited to 64 KiB, commits to 512 KiB, chunks to 48 KiB and traffic to 120
-messages per second. A 1.5-second read lease releases held mouse buttons and
-clears the session scene when the connection ends.
+Treat QR contents as a secret: scan only the PC you intend to use and do not
+share QR screenshots. Pinning does not prevent an attacker from persuading a
+user to scan the attacker's QR or approve the wrong device.
 
-No certificate bypass, public listener, automatic elevation or firewall change
-is used. A loopback QR endpoint requires an explicitly configured ADB reverse
-mapping. For Wi-Fi, start the host on an explicitly selected private IP; Wi-Fi
-acceptance remains unverified.
+## Remembered devices
 
-The host limits failed authentication to three attempts per ten-second window,
-in addition to the three-attempt/five-minute invitation limits. Corrupted or
-unreadable protected state is an error, never a reason to silently reset identity.
+First approval enrolls a random 128-bit device ID and independent 256-bit
+reconnect credential, delivered over the approved TLS connection. The host
+stores its SHA-256 digest, not the credential itself. Resume proves possession
+over the saved certificate pin without another QR/approval.
+
+| Platform | Protected state |
+|---|---|
+| Windows | TLS certificate/private key and up to 32 device records in current-user DPAPI-encrypted `%LOCALAPPDATA%\DrawDock\trust.dpapi` |
+| Android | Last PC endpoint, pin, device ID and reconnect credential in private preferences encrypted with Android Keystore AES-256-GCM |
+
+Windows writes replace the encrypted registry atomically. A lifetime
+`trust.lock` excludes concurrent hosts/device administration; stop the host
+before listing/revoking devices. DPAPI calls disallow UI. Android uses a
+non-exportable key, randomized IV, versioned envelope and authenticated purpose
+string; app backups are disabled.
+
+Unreadable/corrupt state or a missing key fails explicitly. Do not recover by
+silently replacing identity, accepting a changed pin or falling back to
+unverified TLS.
+
+Disconnect/restart preserves trust but ends scene/input state. Android remembers
+one PC endpoint; deliberate re-pairing is used for a changed endpoint/transport.
+Forget PC removes the tablet copy, not a copied credential on another device.
+Host revocation prevents future resumes while preserving identity/other devices.
+See [host administration](run-windows.md#remembered-devices).
+
+Enrollment is enabled when the registry is empty or explicitly requested with
+`--pair`/launcher `-Pair` (also by an explicit `--pairing-info` request).
+Closing enrollment does not disable remembered-device reconnects. Failed
+authentication is additionally bounded to three attempts per ten-second window.
+
+## Transport and session boundaries
+
+The host defaults to loopback and rejects wildcard/public bind addresses.
+Private/local addresses must be selected explicitly. It does not elevate or
+change firewall rules. A loopback endpoint requires an explicit ADB reverse
+mapping for USB; private-network access requires the operator's network policy.
+
+After control approval, a fresh 128-bit session credential authorizes a separate
+video connection on the same TCP port. It has a 30-second acceptance window,
+three-attempt limit and bounded handshake/write deadlines. It cannot grant
+control access, and capture starts only after video authentication.
+
+Control framing, transactions, scene/history storage, image decoding and traffic
+are bounded. A 1.5-second read lease releases held buttons and clears session
+state on loss of control. Mode/source/history/Clear transitions release input;
+blackboard disallows mouse injection into the concealed desktop.
+Source epochs reject queued input for outdated geometry.
+See [protocol limits](protocol.md#resource-limits).
+
+## Content and local automation
+
+Text is plain text escaped before generated SVG rendering. The renderer does
+not resolve arbitrary image paths; images are bounded, validated PNG data.
+Tablet clipboard access happens only after Paste, with provider permissions
+and explicit error reporting, not background polling or URL fetching.
+
+Manual invitation entry and ADB intent delivery use the same pin/token/approval
+checks. `--pairing-info` creates a new plaintext invitation file only at the
+requested path. Use a private path, avoid logging/history disclosure and remove
+that specific file after delivery. QR scanning does not create it.
+
+Never commit trust stores, tokens, private keys or QR payloads. Do not use
+production trust in integration tests or bypass camera/install/OS approval UI.
+
+## Threat boundaries
+
 DPAPI protects against another Windows account/offline file disclosure, not
-malware already running as this Windows user. No hardware-backed/StrongBox
-guarantee is claimed for the Android Keystore key.
+malware running as the same Windows user. Android Keystore storage does not
+imply a hardware-backed or StrongBox key on every device. A compromised,
+already-approved tablet can exercise its granted capabilities until access is
+revoked and the active session is ended.
 
-ADB authorization is not DrawDock authentication. The Xiaomi tablet is visible
-and authorized to ADB, and the built APK was installed after explicit approval.
-The optional `--pairing-info` file contains the same secret invitation in plaintext
-for explicitly requested USB automation; use a private path and remove it after
-delivery. Do not copy its contents into terminal history or logs. QR scanning
-does not create that file. Physical camera-to-PC pairing and pen-to-host behavior
-still need manual acceptance evidence.
+Capture exposes the selected desktop contents to that tablet. Use an appropriate
+display and avoid sensitive captures/logs. Windows secure desktops, protected
+content and higher-integrity application boundaries are not bypassed by the
+ordinary-user presenter/input process.

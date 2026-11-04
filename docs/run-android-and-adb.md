@@ -1,191 +1,145 @@
 # Android client and ADB
 
-The connected target discovered for this PoC is Xiaomi `25099RP13G`, API 36,
-ADB serial `cfa3e5dce217`. Its Android input inventory exposes an
-`NVTCapacitivePen` stylus source, pressure and tilt ranges. Recheck before each
-run:
+## Build and install
+
+Use the JDK/SDK/Gradle configuration in [Development](development.md).
+From the repository root:
 
 ```powershell
-$adb = 'D:\Tools\android-dev\platform-tools\adb.exe'
-$serial = 'cfa3e5dce217'
+gradle -p .\android testDebugUnitTest assembleDebug lintDebug
+if ($LASTEXITCODE -ne 0) { throw 'Android checks failed' }
+
+$adb = 'C:\Path\To\Android\Sdk\platform-tools\adb.exe'
 & $adb devices -l
+$serial = '<authorized-device-serial>'
+& $adb -s $serial install -r .\android\app\build\outputs\apk\debug\app-debug.apk
+if ($LASTEXITCODE -ne 0) { throw 'APK installation failed' }
+& $adb -s $serial shell am start -n 'com.drawdock/.MainActivity'
 ```
 
-Build and run the Android unit tests with the cached Gradle distribution and the
-installed Temurin 17 JDK. No global PATH or system setting is changed:
+Confirm USB debugging authorization and any installation prompt on the selected
+device. Do not target an unspecified tablet when multiple devices are attached.
+The app requires Android API 30 or later; a real stylus is needed for drawing.
+Camera hardware is optional because manual invitation entry is available.
+
+## USB forwarding
+
+The [Windows launcher](run-windows.md#usb-launcher) manages forwarding safely.
+For direct CLI use, inspect existing mappings first:
 
 ```powershell
-$env:JAVA_HOME = 'C:\Program Files\Eclipse Adoptium\jdk-17.0.18.8-hotspot'
-$env:ANDROID_HOME = 'D:\Tools\android-dev'
-$gradle = Get-ChildItem "$env:USERPROFILE\.gradle\wrapper\dists\gradle-9.4.1-bin" -Filter gradle.bat -Recurse -File | Select-Object -First 1 -ExpandProperty FullName
-& $gradle -p E:\dev\DrawDock\android testDebugUnitTest assembleDebug
-if ($LASTEXITCODE -ne 0) { throw 'Android build or unit tests failed' }
-```
-
-Install only the resulting DrawDock debug APK to the explicitly selected tablet:
-
-```powershell
-& $adb -s $serial install -r 'E:\dev\DrawDock\android\app\build\outputs\apk\debug\app-debug.apk'
-```
-
-If Android cancels installation or requests device-side confirmation, do not
-bypass that control. The app's tablet preview is not host annotation.
-
-For USB-only host connection, map the single implemented TLS/TCP port to the
-host's loopback listener. ADB is transport only; the app still verifies the
-scanned TLS certificate fingerprint and single-use pairing token, and the host
-requires explicit approval in a native Windows dialog on first pairing:
-
-```powershell
-& $adb -s $serial reverse tcp:47831 tcp:47831
 & $adb -s $serial reverse --list
 ```
 
-Start `dd-host serve` on the selected output with its default `127.0.0.1`
-listener:
+If the tablet port is unused, create the mapping without replacing another:
 
 ```powershell
-cargo build -p dd-host
-& 'E:\dev\DrawDock\target\debug\dd-host.exe' serve --output '\\.\DISPLAY2'
+& $adb -s $serial reverse --no-rebind tcp:47831 tcp:47831
 ```
 
-In the tablet app choose **Connect > Scan QR**, allow camera permission if
-prompted, and point the camera at the native DrawDock QR window on the PC.
-Confirm the endpoint on the tablet, then choose **Yes** in the PC's
-**DrawDock - approve tablet** dialog for your device. No fingerprint or token
-typing is needed. The QR expires after five minutes and closes after success;
-closing it cancels new enrollment. After this update, pair once to create the
-remembered credential; thereafter tap **Connect** without scanning or another
-PC approval, even after restarting either app. The host stays available after
-Disconnect. For another tablet or a lost/revoked credential, restart using
-`Start-DrawDockHost.ps1 -Restart -Pair` and scan a fresh invitation.
-A loopback QR works through the ADB reverse
-mapping above, not over Wi-Fi. Private-IP Wi-Fi still requires separate acceptance.
-
-**Pair another PC** opens enrollment without reusing the saved credential.
-**Forget PC** removes the tablet's saved endpoint/pin and Keystore-protected
-credential. It does not revoke a copied credential on the host: use the host's
-`devices revoke` command for that. This initial client remembers its last PC
-endpoint; changing transport/IP currently requires deliberate re-pairing.
-
-For optional ADB-assisted launch (without using the camera), pass
-`--pairing-info <new private local path>` to `serve`. The host
-creates that file only if it does not already exist. Read it into a PowerShell
-object and launch the app with its one-time extras:
+If the desired mapping already exists, leave it in place. If it points somewhere
+else, choose another port or explicitly resolve ownership rather than overwriting
+it. Control and video both use this single port. Start the loopback host in a
+separate PowerShell:
 
 ```powershell
-$pairingInfoPath = Join-Path $env:LOCALAPPDATA ('DrawDock-pairing-' + [guid]::NewGuid().ToString('N') + '.json')
-# Include --pairing-info $pairingInfoPath in the dd-host serve arguments.
-$pair = Get-Content -LiteralPath $pairingInfoPath -Raw | ConvertFrom-Json
-& $adb -s $serial shell am start -n 'com.drawdock/.MainActivity' `
-    --es 'com.drawdock.extra.HOST' ([string]$pair.host) `
-    --ei 'com.drawdock.extra.PORT' ([int]$pair.port) `
-    --es 'com.drawdock.extra.FINGERPRINT' ([string]$pair.fingerprint) `
-    --es 'com.drawdock.extra.TOKEN' ([string]$pair.token)
-Remove-Item -LiteralPath $pairingInfoPath
+& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
+    --listen 127.0.0.1 --port 47831 --video-encoder software
 ```
 
-The intent delivers the same fingerprint-pinned, single-use token; it does not
-bypass TLS or host approval. Approve only your tablet in the native PC dialog.
-Confirm tablet Wi-Fi is disabled during USB acceptance. Remove
-only the mapping created for DrawDock after the test:
+The tablet endpoint is `127.0.0.1:47831` through ADB. Loopback invitations do not
+become private-network invitations when Wi-Fi is enabled.
+
+When finished, remove only a mapping you created and no longer need:
 
 ```powershell
 & $adb -s $serial reverse --remove tcp:47831
 ```
 
-The authenticated annotation/control channel and initial monitor video pipeline
-are implemented. Tablet playback, Wi-Fi acceptance, and tablet-to-host pen
-behavior still require physical validation; a successful APK build is not
-evidence of those behaviors.
+## Pair and reconnect
 
-The single **Clear** control clears tablet and PC annotations in a paired
-session. It waits for the host acknowledgement before clearing the tablet;
-timeouts are reported explicitly. Disconnected clearing affects only the tablet
-and reports that no PC is connected. Both the APK and host must be rebuilt and
-restarted for the clear/redraw and shape-endpoint fixes; restarting ends the
-current session. Manually verify freehand, arrow, rectangle and ellipse on the
-physical PC display, then Clear and verify both surfaces are blank.
+1. Choose Connect > Scan QR in the app.
+2. Grant camera access if desired and scan the invitation displayed by your PC.
+3. Confirm the endpoint on the tablet.
+4. Approve only that tablet in the native PC approval dialog.
 
-## Live monitor workspace
+The invitation expires after five minutes. Closing it cancels enrollment.
+Manual invitation entry is under the advanced pairing option and requires
+the full certificate fingerprint and invitation token.
 
-Rebuild both host and APK for protocol version 2, install the APK, and run
-`E:\dev\DrawDock\Start-DrawDockHost.ps1 -Restart`. Pair and approve viewing,
-annotation and pointer access. The monitor dropdown at the top lists the PC
-outputs. **Settings** reopens connection/pairing controls. Drawing controls are
-in the pen radial menu described below. Controls overlay the image rather than reserving drawing space. The video fills
-the largest available aspect-fit rectangle; letterbox margins are not ink
-targets. Changing the monitor cancels active pen contact and waits for video
-geometry acknowledgement before allowing new input.
+First approval saves a Keystore-encrypted reconnect credential and certificate
+pin. Thereafter Connect reuses the saved PC endpoint without another QR/approval,
+including after restarting either app. The host keeps listening after disconnects.
 
-The installed FFmpeg 7.0 native Windows executable supplies gdigrab, libx264
-and NVIDIA NVENC. It is not downloaded or bundled. `DRAWDOCK_FFMPEG` can specify a direct
-executable path on another setup. The stream now uses a 2560x1440 bounding box
-at 30 fps, H.264 High/low-latency encoding and Android MediaCodec decoding.
-Update both applications: old APKs reject the larger format. The app selects
-and checks a decoder that supports the new geometry/rate before enabling input.
-It uses a second pinned-TLS connection on port 47831;
-no additional ADB port or firewall change is needed.
+Pair another PC opens a new enrollment flow. Forget PC removes the tablet's
+saved record but does not revoke a copied credential on the host. For a new
+tablet or re-enrollment, open an invitation with host `--pair` or launcher
+`-Restart -Pair`. Changing IP/transport requires deliberate pairing for the
+new endpoint. See [pairing and threat model](pairing-and-threat-model.md).
 
-Test every source, its corners/center and pen alignment on the physical PC
-display. The live video includes host ink; tablet provisional ink currently
-hands off on pen-up and can momentarily disappear before the captured ink
-arrives. Reconciliation latency/watermarks and fullscreen acceptance are not
-passed. If video fails or its bounded queue overflows, drawing is suspended
-and the app reports that reconnection is required.
+## Workspace
 
-## Pen radial menu and expanded tools
+The top dropdown selects the PC monitor. Video and ink share an aspect-fit
+rectangle; letterbox space is not a drawing target. Changing monitor cancels
+contact and waits for matching video/readiness before enabling new input.
 
-Update **both** the host and APK. Hold the pen still on the mirrored image for
-about 550 ms, lift it, then tap a circular menu button. The menu opens near the
-contact and moves inward at edges to keep its buttons accessible. Finger holds
-do not open it. **Pen tools** in the header is an accessible fallback. The center
-button closes the root or returns from a submenu. In Pointer mode, mouse-down is
-deferred until a drag or short tap is recognized: opening the menu must not
-click the application underneath.
+Hold the pen still for about 550 ms to open the radial tools. Use Settings for
+connection controls or Pen tools as a menu fallback. See [Features](features.md)
+for shape completion, text, transforms, laser/highlighter, blackboard/grid,
+clipboard image paste and Clear.
 
-| Menu | Actions |
+Backgrounding the app ends the session and clears its host annotations/history.
+Copy a clipboard image before connecting, or reconnect after copying. If video
+fails, drawing is suspended and the app reports reconnection is required.
+
+## Optional ADB invitation delivery
+
+Prefer QR for normal pairing. For explicitly chosen USB automation, the host
+can create a new invitation file. In the host console:
+
+```powershell
+$pairingInfoPath = Join-Path $env:LOCALAPPDATA `
+    ('DrawDock-invitation-' + [guid]::NewGuid().ToString('N') + '.json')
+$pairingInfoPath
+& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
+    --pairing-info $pairingInfoPath --video-encoder software
+```
+
+Keep that host running. In a second console, set `$adb`/`$serial` as above and
+use the exact private path printed by the host console:
+
+```powershell
+$pairingInfoPath = '<private-path-printed-by-host-console>'
+$pair = Get-Content -LiteralPath $pairingInfoPath -Raw | ConvertFrom-Json
+try {
+    & $adb -s $serial shell am start -n 'com.drawdock/.MainActivity' `
+        --es 'com.drawdock.extra.HOST' ([string]$pair.host) `
+        --ei 'com.drawdock.extra.PORT' ([int]$pair.port) `
+        --es 'com.drawdock.extra.FINGERPRINT' ([string]$pair.fingerprint) `
+        --es 'com.drawdock.extra.TOKEN' ([string]$pair.token)
+} finally {
+    Remove-Item -LiteralPath $pairingInfoPath
+}
+```
+
+This still requires the pin and native PC approval; it is not an authentication
+bypass. The invitation is plaintext and enters the local ADB process arguments:
+use a private file, avoid logs/recorded command lines and remove it after
+delivery. Do not publish its contents.
+
+## Troubleshooting
+
+| Symptom | Check |
 |---|---|
-| Pen | Freehand, translucent highlighter, temporary laser |
-| Shapes | Rectangle, circle, ellipse, line, polygon, polyline, arrow, text |
-| Select / Edit | Select/move, rotate, resize, mirror horizontally/vertically, deselect |
-| Style | Colors including white; thin, medium and thick strokes/text sizes |
-| Board / Grid | Shared PC blackboard and grid toggles |
-| More | Draw/Pointer mode, finish/cancel path, paste image, Clear all, Settings |
+| ADB device missing/unauthorized | USB debugging, cable, selected serial and device-side authorization |
+| Connect fails on loopback | Host process, matching port and tablet reverse mapping |
+| Host requests new pairing | Invitation/revocation state and saved endpoint; reopen enrollment deliberately |
+| Pin mismatch or protected-store error | Correct PC identity/permissions; never disable pinning or silently reset trust |
+| Video unavailable/input suspended | FFmpeg/encoder output, decoder capabilities and source geometry; reconnect |
+| App disconnects while copying an image | Background lifecycle ends the session; copy first, then connect |
+| Clipboard paste rejects content | Copy an image URI, not a link/text; check provider access and image limits |
+| Menu hold ignored | Use stylus contact inside the image, avoid moving beyond slop and unlock the device |
 
-Tap polygon/polyline vertices individually; long-press and choose **More >
-Finish path** (minimum three/two vertices). Long-press does not add a vertex.
-Changing tool/style, source or session cancels unfinished paths. Text is placed
-by tapping the image, typing up to 512 characters/eight lines, and choosing
-**Place**. Circle drags define a square bounding box; drag diagonally.
-
-Choose **Select / Move**, tap an object, then drag inside its blue bounds.
-For Rotate, drag around the selected bounds' center; for Resize, drag to change
-width/height. Mirror is applied immediately to the selected object. Selection
-is single-object, topmost bounding-box based; transformation preview shows a
-moving bounding frame, and the actual PC object updates on pen-up. Undo/redo
-include transforms and presentation backgrounds. Clear removes drawings, text,
-images, Blackboard and Grid together, and waits for the PC acknowledgement.
-Blackboard prevents Pointer mode so a concealed desktop cannot be clicked.
-
-**Paste image** imports an image URI explicitly copied to the **tablet**
-clipboard, not the PC clipboard and not a copied URL/text. No clipboard monitor,
-extra storage permission or automatic upload is added. The image is decoded on
-a worker, orientation-corrected, bounded to 1280 pixels on its longest edge and
-reduced further when needed to fit 320 KiB of lossless PNG. Source images above
-32 megapixels are rejected explicitly. Paste centers the image and activates
-Select / Move; once the image appears, tap it to select and edit. Queueing is
-not reported as confirmed PC insertion. The PC independently validates and
-re-encodes the bounded PNG.
-
-The existing app lifecycle still ends its session when backgrounded. Copy the
-image **before connecting**, or reconnect after copying; backgrounding clears
-the previous host session's annotations. Clipboard-provider and real-pen
-acceptance remain manual checks, not inferred from APK installation.
-
-Synthetic ADB stylus checks on the connected tablet verified finger exclusion,
-movement cancellation, long-press opening, menu action reachability, correctly
-sized circular buttons and corner clamping. They are **not** evidence of real
-hardware pen input, clipboard-provider compatibility, pointer injection or
-fullscreen/physical PC visual acceptance. Manually exercise every tool on the
-physical PC/projector, including all transformations and shared backgrounds.
+Rebuild both applications when changing the protocol, geometry or negotiated
+video format. Unit tests/builds do not exercise actual device input/decoder
+behavior; use the [device testing guidance](development.md#device-and-visual-checks).

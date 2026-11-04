@@ -1,0 +1,121 @@
+# Architecture
+
+DrawDock has two applications: a native Windows Rust host and a Kotlin Android
+client. The host owns the annotation scene and draws it over the selected
+physical desktop output. The client displays that output's video and supplies
+pen gestures, drawing commands and mouse control.
+
+## Components and ownership
+
+Paths below are relative to the repository root.
+
+| Component | Responsibility |
+|---|---|
+| `crates\dd-scene\src\lib.rs` | Platform-independent scene, validation, selection, affine transforms, canvas, history and transient laser |
+| `apps\dd-host\src\main.rs` | Windows CLI, DPI initialization and application composition |
+| `apps\dd-host\src\windows_overlay.rs` | Output enumeration, topmost layered window, relocation and presentation |
+| `apps\dd-host\src\raster.rs` | Generated SVG, Windows font lookup, resvg rasterization and BGRA conversion |
+| `apps\dd-host\src\session.rs` | TLS control service, authentication, protocol dispatch, source barriers and commit transactions |
+| `apps\dd-host\src\source.rs` | Selected output geometry and source epoch |
+| `apps\dd-host\src\windows_input.rs` | Pointer generations, mode policy, held-button tracking and Win32 `SendInput` |
+| `apps\dd-host\src\trust.rs` | Persistent TLS identity, DPAPI registry and device revocation |
+| `apps\dd-host\src\pairing_window.rs` | Native QR invitation and local approval UI |
+| `apps\dd-host\src\video.rs` | FFmpeg process, H.264 framing and authenticated video service |
+| `android\app\src\main\java\com\drawdock` | Android workspace, input, radial menu, TLS client, decoder and credential store |
+| `Start-DrawDockHost.ps1` | Explicit USB forwarding and loopback host launch |
+
+`dd-scene` contains no Windows APIs. Platform operations stay in the host;
+the host binary has a Windows-only compile guard. Android and Rust share a
+wire contract, not a common source library.
+
+## Input to physical output
+
+1. `InputReducer` admits stylus contacts and tracks pointer identity independently
+   of Android pointer-index changes. `InkInputView` handles gestures and
+   provisional local geometry.
+2. `SessionClient` serializes commands. `SessionOutbox` bounds pending work,
+   paces every frame and coalesces motion without crossing control barriers.
+3. The host checks authentication, source epoch, readiness, mode and payload
+   limits before mutating `Scene` or injecting input.
+4. Scene changes advance a revision. The presenter redraws when needed;
+   transient laser expiry also advances the revision.
+5. `raster.rs` generates SVG from typed scene data, renders with resvg and
+   converts premultiplied RGBA to BGRA for the layered window.
+
+The overlay is topmost, click-through and non-activating. It does not own the
+underlying application's document or intercept its ordinary input.
+Pointer mode uses a separate `SendInput` adapter rather than converting
+annotations into mouse strokes.
+
+## Geometry
+
+Windows DPI awareness is initialized before enumerating outputs. Each output
+has a device name and physical `left`, `top`, `right`, `bottom` bounds; virtual
+desktop coordinates may be negative.
+
+Objects and pointer messages use normalized coordinates in the selected output.
+The Android `ViewportFit` calculation gives video and ink the same aspect-fit
+rectangle; letterbox space is not an annotation target. Pointer injection maps
+selected-output coordinates to the complete Windows virtual desktop.
+
+An object's original points remain unchanged by editing. A normalized affine
+matrix records the edit; the renderer converts it to physical pixel geometry.
+Circle bounds and rotations account for output aspect ratio.
+
+## Scene, history and session state
+
+The canonical scene contains objects, blackboard/grid flags, a revision,
+undo/redo snapshots and a transient laser. Object payloads include style,
+points, optional text/PNG data and an affine transform.
+
+Undoable snapshots contain objects and canvas flags, not laser state. Each
+undo/redo stack evicts oldest snapshots to satisfy its own count/estimated-byte
+budget. Clear is one undoable operation removing objects and resetting canvas
+flags. Session reset additionally removes all history and transient state.
+See [protocol limits](protocol.md#resource-limits) for bounds.
+
+Scenes are kept separately per monitor during one authenticated session.
+Switching output releases held mouse buttons, cancels an in-flight commit and
+laser, saves/restores the relevant scene, moves the overlay and restarts capture.
+The source epoch advances. New input waits until Android renders the matching
+video geometry and completes `source_ready`.
+
+Disconnect, lease expiry and session failure release input and discard session
+scenes/history. Remembered device trust survives these operations; drawings do
+not persist across connections.
+
+## Video and ink
+
+FFmpeg captures the selected Windows desktop, including the host overlay, and
+encodes H.264. A separate pinned-TLS connection on the same TCP port carries
+configuration and Annex-B access units. Android uses `MediaCodec` and a
+`TextureView`.
+
+The capture mode is `included`: committed annotations come from video rather
+than a second local object renderer. Provisional pen ink ends on pen-up. There
+is no frame-to-scene-revision watermark, so the handoff can briefly show a gap.
+See [video streaming](video-streaming.md).
+
+## Concurrency and failure boundaries
+
+The Windows presentation loop runs separately from the TLS session worker.
+Scene and selected-source state are shared through `Arc<Mutex<...>>`.
+The video service manages a cancellable capture reader and bounded frame
+handoff; FFmpeg is an owned child process.
+
+Android performs network reads/writes, video decoding, clipboard image decoding
+and TLS close on workers. UI changes are posted to the main thread. Session
+generations and source epochs prevent late callbacks from affecting a replacement
+connection or display.
+
+Do not perform blocking network/process work on the Android UI thread, retain
+held buttons across mode/source changes, silently replace trust on errors or
+drop dependent H.264 frames. Failures must be surfaced, with input suspended
+when video/source readiness is lost.
+
+## Related documentation
+
+- [Protocol](protocol.md) for wire and ordering rules.
+- [Features](features.md) for gesture and editing semantics.
+- [Pairing and threat model](pairing-and-threat-model.md) for trust boundaries.
+- [ADR 0001](adr/0001-windows-first-poc.md) for the platform decision.

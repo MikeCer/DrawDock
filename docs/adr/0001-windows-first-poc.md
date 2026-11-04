@@ -1,29 +1,41 @@
-# ADR 0001: Windows-first proof of concept
+# ADR 0001: Native Windows host and shared scene model
 
-- Status: accepted for this initial PoC
-- Date: 2026-11-04
+Date: 2026-11-04
 
 ## Decision
 
-Implement a native Rust Windows host and a Kotlin Android client, in W0-W4 order
-from `DrawDock-windows-first-poc-profile.md`. Keep shared scene and coordinate
-logic independent from Windows APIs. Use a software rasterizer first and a
-native layered window for the initial presenter. Use authenticated TLS/TCP;
-USB goes through explicit ADB reverse mappings to loopback.
+Use a native Rust Windows host and Kotlin Android client. Keep shared scene
+validation, history and normalized geometry in `dd-scene`, separate from Windows
+presentation and input APIs.
 
-Linux adapters, GNOME integration, and QUIC/UDP are deferred. They are not
-reported as supported and do not weaken Windows acceptance.
+The presenter is a software-rasterized, topmost layered window with click-through
+and no-activate behavior. Use authenticated TLS/TCP for control and video, and
+explicit ADB reverse mappings to loopback for USB transport.
+
+The host binary is Windows-specific; portability is expressed through the
+platform-independent scene boundary, not speculative adapter implementations.
 
 ## Rationale
 
-The primary acceptance target is real tablet pen input rendered over live
-Windows applications and fullscreen presentations on the physical output.
-Proving that output path first reduces the risk of investing in tablet preview
-or video that never satisfies the host-visible annotation requirement.
+Annotations belong on the selected physical PC output over the application being
+presented. A tablet-local canvas or mouse-only path does not satisfy this
+interaction model.
+
+Native Windows presentation and `SendInput` keep desktop behavior explicit and
+do not require WSL, Docker or elevated execution. Shared normalized geometry
+keeps client layout independent of output resolution while allowing physical
+aspect/DPI corrections at the platform boundary.
 
 ## Consequences
 
-The initial workspace is Windows-only and must fail clearly on other platforms.
-A successful compile is not visual acceptance. Fullscreen stacking, monitor/DPI
-alignment, physical pen dispatch, TLS pairing, pointer injection, capture/video,
-Wi-Fi, and latency remain independent gates until tested.
+The host fails compilation on non-Windows platforms. Windows-specific rendering,
+output enumeration and mouse injection stay outside the shared crate.
+
+Source changes must coordinate overlay placement, scene selection, input release
+and capture geometry. Physical-output, fullscreen, pen and transport checks are
+independent test dimensions; compilation is not a substitute for visual/input
+testing.
+
+The [Windows-first profile](../../specs/DrawDock-windows-first-poc-profile.md)
+records the original requirement context. The
+[architecture guide](../architecture.md) describes the component implementation.

@@ -1,5 +1,8 @@
 # Windows-first implementation status
 
+Historical milestone record. The implementation is described in the
+[architecture guide](../docs/architecture.md).
+
 The Windows PoC profile controls scope and order. The host-visible annotation
 requirement remains mandatory; compiling the native presenter is not proof of
 fullscreen or physical-display behavior.

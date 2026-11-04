@@ -31,9 +31,10 @@ capture-only, screenshot editing and tablet-only drawing do not meet the goal.
 
 Begin with milestone M0. Inspect the repository, available tools, OS/session,
 build environment and connected devices without making privileged/system changes.
-Produce docs/implementation-plan.md, docs/environment.md and a requirement-to-test
-matrix. State blockers, missing hardware and design decisions. Verify library APIs
-against pinned versions; do not invent bindings or claim unsupported capabilities.
+Produce project-status/implementation-plan.md, project-status/environment.md and a
+requirement-to-test matrix. State blockers, missing hardware and design decisions.
+Verify library APIs against pinned versions; do not invent bindings or claim
+unsupported capabilities.
 
 Use a Rust backend and Kotlin Android client. A minimal GNOME Shell GJS presenter
 is the proposed platform exception; ask the owner to confirm this exception before
@@ -93,7 +94,7 @@ Tasks:
 - Discover Rust/Android/JDK/SDK/build tools, display session, compositor, GPU, PipeWire/portal availability, ADB and actual devices. Never assume all are accessible from CI or a container.
 - Create workspace skeleton, protocol directory and build instructions. Select/pin toolchains and candidate dependencies after verifying actual APIs.
 - Write ADRs: raster-first renderer; native adapters; GNOME exception pending approval; TLS pairing; wire format and language interop; initial video pipeline.
-- Populate docs/capability-matrix.md with UNKNOWN/NOT RUN, not optimistic PASS.
+- Populate project-status/capability-matrix.md with UNKNOWN/NOT RUN, not optimistic PASS.
 
 Exit evidence: environment inventory, architecture sketch, dependency/license inventory and runnable unit-test skeleton. Ask one consolidated set of consequential questions only: approval of GNOME GJS exception, missing reference devices/sessions and any genuinely blocking system setup. Do not ask the owner to choose low-level details already specified.
 
@@ -221,9 +222,9 @@ Each milestone report includes: changes, commands actually run and exit status, 
 ## 13. Required repository deliverables
 
 ```text
-docs/implementation-plan.md
-docs/environment.md
-docs/capability-matrix.md
+project-status/implementation-plan.md
+project-status/environment.md
+project-status/capability-matrix.md
 docs/protocol.md
 docs/pairing-and-threat-model.md
 docs/run-windows.md
@@ -232,7 +233,7 @@ docs/run-linux-wayland-layer.md
 docs/run-linux-gnome.md
 docs/run-android-and-adb.md
 docs/adr/                   # versioned architecture decisions
-docs/feasibility-report.md
+project-status/feasibility-report.md
 reports/                    # actual non-sensitive test/metric outputs
 scripts/                    # explicit setup/test commands, no silent system changes
 ```

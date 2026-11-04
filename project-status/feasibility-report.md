@@ -1,5 +1,8 @@
 # Initial Windows feasibility report
 
+Historical implementation and validation record. Technical documentation starts
+at [docs](../docs/README.md).
+
 **Current verdict: PARTIAL.**
 
 ## Verified environment and builds

@@ -1,5 +1,8 @@
 # Capability matrix
 
+Historical validation record. Contributor documentation starts at
+[docs](../docs/README.md).
+
 Status reflects implementation and evidence available on 2026-11-04.
 
 | Windows requirement | Status | Evidence / gap |
