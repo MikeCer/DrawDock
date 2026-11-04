@@ -1,0 +1,18 @@
+[package]
+name = "dd-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dd-scene = { path = "../../crates/dd-scene" }
+serde.workspace = true
+serde_json.workspace = true
+rustls = { version = "0.23.35", default-features = false, features = ["ring", "std", "tls12"] }
+rcgen = "0.13.2"
+getrandom = "0.3.4"
+sha2 = "0.10.9"
+base64 = "0.22.1"
+qrcode = { version = "0.14.1", default-features = false }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+

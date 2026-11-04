@@ -1,0 +1,5 @@
+/target/
+/android/.gradle/
+/android/local.properties
+/android/app/build/
+/reports/*.json
