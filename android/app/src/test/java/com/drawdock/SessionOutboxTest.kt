@@ -5,6 +5,25 @@ import org.junit.Test
 
 class SessionOutboxTest {
     @Test
+    fun laserMotionCoalescesWithoutLosingStopSourceOrControlBarriers() {
+        val outbox = SessionOutbox()
+        fun laser(x: Float, active: Boolean = true, epoch: Long = 1) =
+            SessionCommand.Laser(active, x, 0.5f, 0, epoch)
+        repeat(2_000) { assertTrue(outbox.offer(laser(it.toFloat()))) }
+        val stop = laser(1999f, false)
+        assertTrue(outbox.offer(stop))
+        val next = laser(0f)
+        assertTrue(outbox.offer(next))
+        val newSource = laser(0f, epoch = 2)
+        assertTrue(outbox.offer(newSource))
+        assertEquals(laser(1999f), outbox.poll(0))
+        assertEquals(stop, outbox.poll(0))
+        assertEquals(next, outbox.poll(0))
+        assertEquals(newSource, outbox.poll(0))
+        assertNull(outbox.poll(0))
+    }
+
+    @Test
     fun sourceEpochChangePreventsCoalescingOldAndNewGeometry() {
         val outbox = SessionOutbox()
         val old = pointer("hover").copy(sourceEpoch = 1)

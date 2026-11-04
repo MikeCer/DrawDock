@@ -200,6 +200,12 @@ impl PointerState {
         }
         Ok(self.release_event())
     }
+
+    fn force_draw(&mut self) -> Result<Option<NativePointerEvent>, String> {
+        let event = self.release_all()?;
+        self.mode = Mode::Draw;
+        Ok(event)
+    }
 }
 
 #[derive(Debug)]
@@ -209,6 +215,24 @@ pub struct WindowsInput {
 }
 
 impl WindowsInput {
+    pub fn mode(&self) -> Mode {
+        self.state.mode
+    }
+    pub fn aspect(&self) -> f32 {
+        self.output.width as f32 / self.output.height as f32
+    }
+    pub fn force_draw(&mut self) -> Result<(), String> {
+        // Forced policy changes must not consume the tablet's request-id sequence.
+        let previous = self.state.clone();
+        let event = self.state.force_draw()?;
+        if let Some(event) = event
+            && let Err(error) = send_mouse(self.output, event.x, event.y, event.flags)
+        {
+            self.state = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
     pub fn select_output(&mut self, output: OutputBounds) -> Result<(), String> {
         if output.width <= 0 || output.height <= 0 {
             return Err("selected output has invalid pointer geometry".into());
@@ -339,6 +363,19 @@ fn send_mouse(output: OutputBounds, x: f32, y: f32, flags: u32) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blackboard_force_draw_releases_buttons_without_consuming_mode_request_sequence() {
+        let mut state = PointerState::new();
+        state.set_mode(Mode::Pointer, 9).unwrap();
+        state.pointer("down", 1, 0.5, 0.5, "left").unwrap();
+        let release = state.force_draw().unwrap().unwrap();
+        assert_eq!(release.flags & MOUSEEVENTF_LEFTUP, MOUSEEVENTF_LEFTUP);
+        assert_eq!(state.mode, Mode::Draw);
+        assert!(state.active.is_none());
+        assert!(state.set_mode(Mode::Pointer, 9).is_err());
+        state.set_mode(Mode::Pointer, 10).unwrap();
+    }
 
     #[test]
     fn draw_mode_rejects_all_remote_pointer_commands() {

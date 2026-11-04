@@ -6,4 +6,9 @@ license.workspace = true
 
 [dependencies]
 serde.workspace = true
+base64 = "0.22.1"
+png = "0.17.16"
+
+[dev-dependencies]
+serde_json.workspace = true
 

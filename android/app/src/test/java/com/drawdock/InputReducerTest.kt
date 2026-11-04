@@ -38,4 +38,14 @@ class InputReducerTest {
         assertTrue(result is InputResult.Ended && result.canceled)
         assertEquals(InputResult.Ignored, reducer.handle(MotionEvent.ACTION_MOVE, 11, sample(11)))
     }
+
+    @Test
+    fun invalidCoordinatesCannotBecomeInkAndInvalidUpCancels() {
+        val reducer = InputReducer()
+        reducer.handle(MotionEvent.ACTION_DOWN, 11, sample(11))
+        val invalid = sample(11).copy(x = Float.NaN)
+        assertEquals(InputResult.Ignored, reducer.handle(MotionEvent.ACTION_MOVE, 11, invalid))
+        val end = reducer.handle(MotionEvent.ACTION_UP, 11, invalid)
+        assertTrue(end is InputResult.Ended && end.canceled && end.sample == null)
+    }
 }

@@ -1,6 +1,7 @@
 package com.drawdock
 
 import android.content.Intent
+import android.content.ClipboardManager
 import android.graphics.Color
 import android.graphics.SurfaceTexture
 import android.os.Bundle
@@ -21,26 +22,32 @@ import android.widget.ArrayAdapter
 import android.widget.AdapterView
 import android.widget.HorizontalScrollView
 import android.text.InputType
+import android.text.InputFilter
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
     private val qrScanner = registerForActivityResult(ScanContract()) { result ->
         handleQrResult(result.contents)
     }
     private lateinit var inputView: InkInputView
-    private lateinit var modeButton: Button
     private lateinit var connectionButton: Button
-    private lateinit var clearPcButton: Button
     private lateinit var statusText: TextView
     private lateinit var screenSelector: Spinner
     private lateinit var workspace: FrameLayout
     private lateinit var videoTexture: TextureView
     private lateinit var toolsMenu: ScrollView
     private lateinit var menuButton: Button
+    private lateinit var radialMenu: RadialMenuView
+    private var blackboard = false
+    private var grid = false
+    private var pendingEditorRequestId: Long? = null
+    private var clipboardImportPending = false
     private var videoSurface: Surface? = null
     private var pendingConnection: (() -> Unit)? = null
     private var sources = emptyList<Pair<String, String>>()
@@ -86,11 +93,15 @@ class MainActivity : ComponentActivity() {
         screenSelector.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
             listOf("Connect to select a PC screen"))
         header.addView(screenSelector, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        menuButton = button("Hide tools") {
+        menuButton = button("Hide settings") {
             val show = toolsMenu.visibility != View.VISIBLE
             toolsMenu.visibility = if (show) View.VISIBLE else View.GONE
-            text = if (show) "Hide tools" else "Tools"
+            text = if (show) "Hide settings" else "Settings"
         }
+        header.addView(button("Pen tools") {
+            inputView.cancelActiveContact(keepPath = true)
+            showRadialMenu(workspace.width / 2f, workspace.height / 2f)
+        })
         header.addView(menuButton)
         root.addView(header)
         workspace = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
@@ -149,55 +160,9 @@ class MainActivity : ComponentActivity() {
             isClickable = true
         }
         val topRow = row(controls)
-        modeButton = button("Draw: ON") {
-            requestModeChange()
-        }.also(topRow::addView)
         connectionButton = button("Connect") {
             if (sessionClient == null) connectRememberedOrPair() else disconnectSession()
         }.also(topRow::addView)
-        listOf(
-            "Freehand" to DrawTool.FREEHAND,
-            "Arrow" to DrawTool.ARROW,
-            "Rectangle" to DrawTool.RECTANGLE,
-            "Ellipse" to DrawTool.ELLIPSE,
-        ).forEach { (label, tool) ->
-            button(label) {
-                selectedTool = tool
-                configureInput()
-            }.also(topRow::addView)
-        }
-
-        val secondRow = row(controls)
-        listOf(
-            "Red" to Color.RED,
-            "Orange" to 0xFFFF9800.toInt(),
-            "Yellow" to Color.YELLOW,
-            "Green" to Color.GREEN,
-            "Blue" to Color.BLUE,
-            "Black" to Color.BLACK,
-        ).forEach { (label, color) ->
-            button(label) {
-                selectedColor = color
-                configureInput()
-            }.also(secondRow::addView)
-        }
-
-        val thirdRow = row(controls)
-        listOf("Thin" to 3f, "Medium" to 6f, "Thick" to 12f).forEach { (label, width) ->
-            button(label) {
-                selectedWidth = width * resources.displayMetrics.density
-                configureInput()
-            }.also(thirdRow::addView)
-        }
-        button("Undo") {
-            if (sessionActive) sessionClient?.undo() else inputView.undo()
-        }.also(thirdRow::addView)
-        button("Redo") {
-            if (sessionActive) sessionClient?.redo() else inputView.redo()
-        }.also(thirdRow::addView)
-        clearPcButton = button("Clear") {
-            confirmRemoteClear()
-        }.also(thirdRow::addView)
 
         statusText = TextView(this).apply {
             text = "Not connected; tablet preview alone is not PC annotation."
@@ -213,6 +178,8 @@ class MainActivity : ComponentActivity() {
         controls.addView(statusText)
         toolsMenu = ScrollView(this).apply { addView(controls); elevation = 8f }
         workspace.addView(toolsMenu, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+        radialMenu = RadialMenuView(this)
+        workspace.addView(radialMenu, FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
         inputView.onCommit = { mark ->
             val client = sessionClient
@@ -224,6 +191,18 @@ class MainActivity : ComponentActivity() {
         }
         inputView.onUndo = { sessionClient?.undo() }
         inputView.onRedo = { sessionClient?.redo() }
+        inputView.onMessage = { notifyDrawing(it) }
+        inputView.onLongPress = { x, y -> showRadialMenu(x + inputView.left, y + inputView.top) }
+        inputView.onSelect = { x, y ->
+            sendEditor(JSONObject().put("type", "select_object").put("x", x.toDouble()).put("y", y.toDouble()))
+        }
+        inputView.onTransform = { id, transform -> sendTransform(id, transform) }
+        inputView.onRequestText = { x, y -> requestText(x, y) }
+        inputView.onLaser = { active, x, y, color ->
+            if (sessionActive && sessionClient?.sendLaser(active, x, y, color, inputView.width, inputView.height) != true) {
+                notifyDrawing("Laser update was not queued.")
+            }
+        }
         inputView.onPointerEvent = { event ->
             val client = sessionClient
             if (client == null || !client.sendPointer(event, inputView.width, inputView.height)) {
@@ -250,6 +229,272 @@ class MainActivity : ComponentActivity() {
         inputView.configure(selectedTool, selectedColor, selectedWidth)
     }
 
+    private fun notifyDrawing(message: String) {
+        statusText.text = message
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showRadialMenu(x: Float, y: Float) {
+        radialMenu.open(x, y)
+        radialRoot()
+    }
+
+    private fun radialAction(label: String, action: () -> Unit) =
+        RadialMenuView.Item(label) { radialMenu.dismiss(); action() }
+
+    private fun radialRoot() {
+        radialMenu.page(listOf(
+            RadialMenuView.Item("Pen") { penPage() },
+            RadialMenuView.Item("Shapes") { shapesPage() },
+            RadialMenuView.Item("Select /\nEdit") { editPage() },
+            RadialMenuView.Item("Style") { stylePage() },
+            RadialMenuView.Item("Board /\nGrid") { canvasPage() },
+            radialAction("Undo") { history(false) },
+            radialAction("Redo") { history(true) },
+            RadialMenuView.Item("More") { morePage() },
+        ))
+    }
+
+    private fun toolItem(label: String, tool: DrawTool) = radialAction(label) { pickTool(tool) }
+
+    private fun penPage() {
+        radialMenu.page(listOf(toolItem("Free", DrawTool.FREEHAND),
+            toolItem("High-\nlighter", DrawTool.HIGHLIGHTER), toolItem("Laser", DrawTool.LASER)), ::radialRoot)
+    }
+
+    private fun shapesPage() {
+        radialMenu.page(listOf(
+            toolItem("Rectangle", DrawTool.RECTANGLE), toolItem("Circle", DrawTool.CIRCLE),
+            toolItem("Ellipse", DrawTool.ELLIPSE), toolItem("Line", DrawTool.LINE),
+            toolItem("Polygon", DrawTool.POLYGON), toolItem("Polyline", DrawTool.POLYLINE),
+            toolItem("Arrow", DrawTool.ARROW), toolItem("Text", DrawTool.TEXT),
+        ), ::radialRoot)
+    }
+
+    private fun editPage() {
+        radialMenu.page(listOf(
+            toolItem("Select /\nMove", DrawTool.SELECT_MOVE), toolItem("Rotate", DrawTool.ROTATE),
+            toolItem("Resize", DrawTool.RESIZE),
+            radialAction("Mirror\nH") { mirror(true) }, radialAction("Mirror\nV") { mirror(false) },
+            radialAction("Deselect") { inputView.selection = null },
+        ), ::radialRoot)
+    }
+
+    private fun stylePage() {
+        radialMenu.page(listOf(
+            RadialMenuView.Item("Color") {
+                radialMenu.page(listOf("Red" to Color.RED, "Orange" to 0xFFFF9800.toInt(),
+                    "Yellow" to Color.YELLOW, "Green" to Color.GREEN, "Blue" to Color.BLUE,
+                    "Black" to Color.BLACK, "White" to Color.WHITE).map { (label, color) ->
+                    radialAction(label) { selectedColor = color; configureInput() }
+                }, ::stylePage)
+            },
+            RadialMenuView.Item("Width") {
+                radialMenu.page(listOf("Thin" to 3f, "Medium" to 6f, "Thick" to 12f).map { (label, width) ->
+                    radialAction(label) {
+                        selectedWidth = width * resources.displayMetrics.density
+                        configureInput()
+                    }
+                }, ::stylePage)
+            },
+        ), ::radialRoot)
+    }
+
+    private fun canvasPage() {
+        radialMenu.page(listOf(
+            radialAction(if (blackboard) "Blackboard\nOFF" else "Blackboard\nON") {
+                sendEditor(JSONObject().put("type", "set_canvas").put("blackboard", !blackboard).put("grid", grid))
+            },
+            radialAction(if (grid) "Grid OFF" else "Grid ON") {
+                sendEditor(JSONObject().put("type", "set_canvas").put("blackboard", blackboard).put("grid", !grid))
+            },
+        ), ::radialRoot)
+    }
+
+    private fun morePage() {
+        radialMenu.page(listOf(
+            radialAction(if (inputView.drawMode) "Pointer\nmode" else "Draw\nmode") { requestModeChange() },
+            radialAction("Finish\npath") { inputView.finishPath() },
+            radialAction("Cancel\npath") { inputView.cancelActiveContact() },
+            radialAction("Paste\nimage") { pasteClipboardImage() },
+            radialAction("Clear\nall") { confirmRemoteClear() },
+            radialAction("Settings") { toolsMenu.visibility = View.VISIBLE; menuButton.text = "Hide settings" },
+        ), ::radialRoot)
+    }
+
+    private fun pickTool(tool: DrawTool) {
+        if (tool in listOf(DrawTool.LASER, DrawTool.SELECT_MOVE, DrawTool.ROTATE, DrawTool.RESIZE) && !sessionActive) {
+            notifyDrawing("Connect to the PC to use this tool.")
+            return
+        }
+        selectedTool = tool
+        if (tool !in listOf(DrawTool.SELECT_MOVE, DrawTool.ROTATE, DrawTool.RESIZE)) inputView.selection = null
+        configureInput()
+        if (!inputView.drawMode) requestModeChange()
+        else notifyDrawing("${tool.name.lowercase().replace('_', ' ')} - long-press the pen for tools.")
+    }
+
+    private fun history(redo: Boolean) {
+        inputView.cancelActiveContact()
+        inputView.selection = null
+        if (sessionActive) {
+            if (!editorReady()) { notifyDrawing("Wait until the PC screen is ready."); return }
+            val sent = if (redo) sessionClient?.redo() else sessionClient?.undo()
+            if (sent != true) notifyDrawing("History command was not queued.")
+        } else if (redo) inputView.redo() else inputView.undo()
+    }
+
+    private fun editorReady() =
+        sessionActive && readyEpoch == sourceEpoch && !videoFailed && pendingSourceRequestId == null &&
+            pendingEditorRequestId == null && pendingClearRequestId == null && pendingModeRequestId == null
+
+    private fun sendEditor(message: JSONObject) {
+        if (!editorReady()) { notifyDrawing("Connect and wait until the PC screen is ready."); return }
+        val client = sessionClient ?: return
+        val request = client.editor(message)
+        if (request == null) { notifyDrawing("Drawing command was not queued."); return }
+        pendingEditorRequestId = request
+        refreshInputReady()
+        workspace.postDelayed({
+            if (sessionClient === client && pendingEditorRequestId == request) {
+                disconnectSession()
+                notifyDrawing("Drawing command was not acknowledged; reconnect required.")
+            }
+        }, 10_000)
+    }
+
+    private fun transformJson(value: Affine2D) = JSONObject()
+        .put("a", value.a.toDouble()).put("b", value.b.toDouble()).put("c", value.c.toDouble())
+        .put("d", value.d.toDouble()).put("tx", value.tx.toDouble()).put("ty", value.ty.toDouble())
+
+    private fun sendTransform(id: Long, transform: Affine2D) {
+        sendEditor(JSONObject().put("type", "transform_object").put("object_id", id)
+            .put("transform", transformJson(transform)))
+    }
+
+    private fun mirror(horizontal: Boolean) {
+        val selected = inputView.selection
+        if (selected == null) { notifyDrawing("Use Select / Move and tap an object first."); return }
+        val delta = Affine2D.around(selected.bounds.centerX, selected.bounds.centerY,
+            if (horizontal) -1f else 1f, 0f, 0f, if (horizontal) 1f else -1f)
+        sendTransform(selected.id, delta * selected.transform)
+    }
+
+    private fun applyEditorEvent(response: JSONObject) {
+        if (response.optLong("source_epoch", -1) != sourceEpoch) return
+        val request = response.optLong("request_id", -1)
+        if (response.optString("type") == "error") {
+            if (pendingEditorRequestId == request) pendingEditorRequestId = null
+            if (pendingModeRequestId == request) pendingModeRequestId = null
+            if (pendingClearRequestId == request) pendingClearRequestId = null
+            refreshInputReady()
+            return
+        }
+        if (pendingEditorRequestId == request) pendingEditorRequestId = null
+        response.optJSONObject("canvas")?.let {
+            blackboard = it.getBoolean("blackboard")
+            grid = it.getBoolean("grid")
+        }
+        if (response.has("mode")) inputView.drawMode = response.getString("mode") == "draw"
+        if (response.has("selection")) {
+            inputView.selection = response.optJSONObject("selection")?.let {
+                val bounds = it.getJSONObject("bounds")
+                val matrix = it.getJSONObject("transform")
+                EditorSelection(it.getLong("id"), EditorBounds(
+                    bounds.getDouble("left").toFloat(), bounds.getDouble("top").toFloat(),
+                    bounds.getDouble("right").toFloat(), bounds.getDouble("bottom").toFloat()),
+                    Affine2D(matrix.getDouble("a").toFloat(), matrix.getDouble("b").toFloat(),
+                        matrix.getDouble("c").toFloat(), matrix.getDouble("d").toFloat(),
+                        matrix.getDouble("tx").toFloat(), matrix.getDouble("ty").toFloat()))
+            }
+            statusText.text = if (inputView.selection == null) "No object selected; long-press for tools."
+                else "Object selected. Drag to move, or choose Rotate / Resize / Mirror."
+        }
+        refreshInputReady()
+    }
+
+    private fun requestText(x: Float, y: Float) {
+        val generation = sessionGeneration
+        val epoch = sourceEpoch
+        val field = EditText(this).apply {
+            hint = "Text to place on the PC"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            filters = arrayOf(InputFilter.LengthFilter(512))
+            maxLines = 8
+        }
+        val fontSize = when {
+            selectedWidth <= 3f * resources.displayMetrics.density -> 0.022f
+            selectedWidth >= 12f * resources.displayMetrics.density -> 0.05f
+            else -> 0.035f
+        }
+        android.app.AlertDialog.Builder(this).setTitle("Place text").setView(field)
+            .setNegativeButton("Cancel", null).setPositiveButton("Place") { _, _ ->
+                val text = field.text.toString()
+                if (text.isBlank()) { notifyDrawing("Text cannot be empty."); return@setPositiveButton }
+                if (text.lines().size > 8) { notifyDrawing("Use at most 8 lines per text object."); return@setPositiveButton }
+                if (generation != sessionGeneration || epoch != sourceEpoch ||
+                    (sessionClient != null && !editorReady())) {
+                    notifyDrawing("Text was not placed because the PC screen/session changed.")
+                    return@setPositiveButton
+                }
+                inputView.addText(x, y, text, fontSize)
+            }.show()
+    }
+
+    private fun pasteClipboardImage() {
+        if (!editorReady() || !inputView.drawMode) {
+            notifyDrawing("Connect to the PC and enable Draw mode before pasting an image.")
+            return
+        }
+        if (clipboardImportPending) { notifyDrawing("An image is already being read."); return }
+        val uri = try {
+            getSystemService(ClipboardManager::class.java).primaryClip?.let { clip ->
+                if (clip.itemCount > 0) clip.getItemAt(0).uri else null
+            }
+        } catch (error: SecurityException) {
+            notifyDrawing("Tablet clipboard access was denied.")
+            return
+        }
+        if (uri == null) { notifyDrawing("Copy an image to the tablet clipboard, not text or a web link."); return }
+        val generation = sessionGeneration
+        val epoch = sourceEpoch
+        clipboardImportPending = true
+        statusText.text = "Reading tablet clipboard image..."
+        thread(name = "drawdock-clipboard-image") {
+            try {
+                val image = ClipboardImage.read(contentResolver, uri)
+                runOnUiThread {
+                    if (generation != sessionGeneration || epoch != sourceEpoch || !editorReady()) {
+                        notifyDrawing("Image was not pasted because the PC screen/session changed.")
+                    } else {
+                        val scale = minOf(inputView.width * 0.6f / image.width, inputView.height * 0.6f / image.height)
+                        val w = image.width * scale
+                        val h = image.height * scale
+                        val left = (inputView.width - w) / 2
+                        val top = (inputView.height - h) / 2
+                        val mark = InkMark(DrawTool.IMAGE, Color.WHITE, 0.005f * minOf(inputView.width, inputView.height),
+                            listOf(left to top, left + w to top + h), imageData = image.base64)
+                        if (sessionClient?.sendMark(mark, inputView.width, inputView.height) == true) {
+                            inputView.selection = null
+                            pickTool(DrawTool.SELECT_MOVE)
+                            notifyDrawing("Image queued (${image.width}x${image.height}); tap it once visible, then drag to position it.")
+                        } else notifyDrawing("Image was not queued.")
+                    }
+                }
+            } catch (error: java.io.IOException) {
+                runOnUiThread { notifyDrawing("Cannot read clipboard image: ${error.message}") }
+            } catch (error: SecurityException) {
+                runOnUiThread { notifyDrawing("Clipboard image access denied; copy the image again.") }
+            } catch (error: IllegalArgumentException) {
+                runOnUiThread { notifyDrawing(error.message ?: "Unsupported clipboard image.") }
+            } catch (error: IllegalStateException) {
+                runOnUiThread { notifyDrawing(error.message ?: "Cannot prepare clipboard image.") }
+            } finally {
+                runOnUiThread { clipboardImportPending = false }
+            }
+        }
+    }
+
     private fun fitWorkspace() {
         if (workspace.width <= 0 || workspace.height <= 0) return
         val fit = ViewportFit.calculate(workspace.width, workspace.height,
@@ -271,7 +516,8 @@ class MainActivity : ComponentActivity() {
     private fun refreshInputReady() {
         inputView.setInputReady(
             sessionClient == null || (sessionActive && readyEpoch == sourceEpoch && !videoFailed &&
-                pendingModeRequestId == null && pendingClearRequestId == null && pendingSourceRequestId == null),
+                pendingModeRequestId == null && pendingClearRequestId == null &&
+                pendingSourceRequestId == null && pendingEditorRequestId == null),
         )
     }
 
@@ -280,6 +526,10 @@ class MainActivity : ComponentActivity() {
         sourceName = selected.getJSONObject("source").getString("name")
         readyEpoch = null
         pendingReadyEpoch = null
+        pendingEditorRequestId = null
+        blackboard = false
+        grid = false
+        radialMenu.dismiss()
         inputView.clear()
         inputView.setInputReady(false)
         screenSelector.setSelection(sources.indexOfFirst { it.first == sourceName }.coerceAtLeast(0))
@@ -289,6 +539,11 @@ class MainActivity : ComponentActivity() {
         val client = sessionClient
         if (client == null) {
             statusText.text = "Connect to the host before enabling Pointer mode."
+            return
+        }
+        if (!editorReady()) { notifyDrawing("Wait until the PC screen is ready."); return }
+        if (inputView.drawMode && blackboard) {
+            notifyDrawing("Turn Blackboard off before switching to Pointer mode.")
             return
         }
         inputView.cancelActiveContact()
@@ -302,6 +557,12 @@ class MainActivity : ComponentActivity() {
         }
         pendingModeRequestId = requestId
         statusText.text = "Waiting for host to acknowledge $mode mode…"
+        workspace.postDelayed({
+            if (sessionClient === client && pendingModeRequestId == requestId) {
+                disconnectSession()
+                notifyDrawing("Mode change was not acknowledged; reconnect required.")
+            }
+        }, 5_000)
     }
 
     private fun row(parent: LinearLayout) = LinearLayout(this).apply row@{
@@ -490,15 +751,17 @@ class MainActivity : ComponentActivity() {
                         refreshInputReady()
                         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         connectionButton.text = "Disconnect"
-                        clearPcButton.isEnabled = pendingClearRequestId == null
                         screenSelector.isEnabled = pendingSourceRequestId == null
                     } else {
                         inputView.setInputReady(false)
                         inputView.drawMode = true
-                        modeButton.text = "Draw: ON"
                         pendingModeRequestId = null
                         pendingClearRequestId = null
-                        clearPcButton.isEnabled = true
+                        pendingEditorRequestId = null
+                        inputView.selection = null
+                        blackboard = false
+                        grid = false
+                        radialMenu.dismiss()
                         screenSelector.isEnabled = false
                         readyEpoch = null
                         inputView.remoteVideoVisible = false
@@ -509,7 +772,7 @@ class MainActivity : ComponentActivity() {
                         sessionClient = null
                         connectionButton.text = "Connect"
                         toolsMenu.visibility = View.VISIBLE
-                        menuButton.text = "Hide tools"
+                        menuButton.text = "Hide settings"
                         refreshInputReady()
                     }
                 }
@@ -518,8 +781,8 @@ class MainActivity : ComponentActivity() {
                 if (generation == sessionGeneration && requestId == pendingModeRequestId) {
                     pendingModeRequestId = null
                     inputView.drawMode = mode == "draw"
+                    if (mode == "pointer") inputView.selection = null
                     refreshInputReady()
-                    modeButton.text = if (inputView.drawMode) "Draw: ON" else "Pointer: ON"
                     statusText.text = "Host acknowledged ${mode} mode"
                 }
             },
@@ -528,8 +791,19 @@ class MainActivity : ComponentActivity() {
                     pendingClearRequestId = null
                     inputView.clear()
                     refreshInputReady()
-                    clearPcButton.isEnabled = true
-                    statusText.text = "Tablet and PC annotations cleared."
+                    blackboard = false
+                    grid = false
+                    statusText.text = "Tablet and PC cleared, including Blackboard and Grid."
+                }
+            },
+            onEditorEvent = { response ->
+                if (generation == sessionGeneration) {
+                    try {
+                        applyEditorEvent(response)
+                    } catch (error: org.json.JSONException) {
+                        disconnectSession()
+                        notifyDrawing("Invalid PC drawing response; reconnect required.")
+                    }
                 }
             },
             videoSurface = surface,
@@ -563,7 +837,7 @@ class MainActivity : ComponentActivity() {
                     inputView.remoteVideoVisible = true
                     refreshInputReady()
                     toolsMenu.visibility = View.GONE
-                    menuButton.text = "Tools"
+                    menuButton.text = "Settings"
                     statusText.text = "Live $sourceName - ${videoWidth}x$videoHeight H.264 / included host ink"
                 }
             },
@@ -592,7 +866,7 @@ class MainActivity : ComponentActivity() {
                     inputView.setInputReady(false)
                     statusText.text = "Video unavailable: $message. Reconnect required."
                     toolsMenu.visibility = View.VISIBLE
-                    menuButton.text = "Hide tools"
+                    menuButton.text = "Hide settings"
                 }
             },
             rememberedDeviceId = deviceId,
@@ -609,13 +883,17 @@ class MainActivity : ComponentActivity() {
 
     private fun confirmRemoteClear() {
         android.app.AlertDialog.Builder(this)
-            .setMessage("Clear all annotations on the tablet and connected PC?")
+            .setMessage("Clear all drawings, text and images on the tablet and PC, and turn Blackboard and Grid off?")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear") { _, _ ->
                 val client = sessionClient
                 if (client == null) {
                     inputView.clear()
                     statusText.text = "Tablet cleared; no PC session is connected."
+                    return@setPositiveButton
+                }
+                if (!editorReady()) {
+                    notifyDrawing("Wait until the PC screen is ready before clearing.")
                     return@setPositiveButton
                 }
                 inputView.setInputReady(false)
@@ -625,13 +903,11 @@ class MainActivity : ComponentActivity() {
                     statusText.text = "Clear was not queued; annotations were not cleared."
                 } else {
                     pendingClearRequestId = requestId
-                    clearPcButton.isEnabled = false
                     statusText.text = "Waiting for the PC to acknowledge Clear…"
                     inputView.postDelayed({
                         if (pendingClearRequestId == requestId && sessionClient === client) {
                             pendingClearRequestId = null
                             refreshInputReady()
-                            clearPcButton.isEnabled = true
                             statusText.text = "Clear was not acknowledged; PC state is unknown."
                         }
                     }, 5_000)
@@ -649,6 +925,11 @@ class MainActivity : ComponentActivity() {
         readyEpoch = null
         pendingReadyEpoch = null
         pendingSourceRequestId = null
+        pendingEditorRequestId = null
+        blackboard = false
+        grid = false
+        if (::radialMenu.isInitialized) radialMenu.dismiss()
+        inputView.selection = null
         videoWidth = 0
         videoHeight = 0
         if (::videoTexture.isInitialized) videoTexture.alpha = 0f
@@ -656,7 +937,6 @@ class MainActivity : ComponentActivity() {
         inputView.remoteVideoVisible = false
         pendingModeRequestId = null
         pendingClearRequestId = null
-        if (::clearPcButton.isInitialized) clearPcButton.isEnabled = true
         connectionButtonSafeText("Connect")
         if (::statusText.isInitialized) {
             statusText.text = "Disconnected; tablet preview alone is not PC annotation."

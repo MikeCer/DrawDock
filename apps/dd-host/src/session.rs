@@ -7,7 +7,7 @@ use crate::{
     windows_overlay::Output,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use dd_scene::{InkObject, Scene};
+use dd_scene::{Canvas, InkObject, Point, Scene, Transform};
 use rustls::{ServerConnection, StreamOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -389,9 +389,8 @@ fn serve_authenticated(
             }
             if command == "source_ready" {
                 source_ready = true;
-                return Ok(Some(
-                    json!({"type": "source_ready_ack", "source_epoch": message["source_epoch"]}),
-                ));
+                let canvas = scene.lock().map_err(|_| "scene lock poisoned")?.canvas();
+                return Ok(Some(source_ready_ack(&message, canvas, input.mode())));
             }
             if command == "select_source" {
                 let name = message["source"].as_str().ok_or("source name missing")?;
@@ -412,36 +411,28 @@ fn serve_authenticated(
                 transaction = None;
                 let mut selected = source.lock().map_err(|_| "source lock poisoned")?;
                 let mut scene = scene.lock().map_err(|_| "scene lock poisoned")?;
+                scene.clear_laser();
                 source_scenes.insert(selected.output.name.clone(), scene.clone());
                 *scene = source_scenes.remove(name).unwrap_or_default();
+                if scene.canvas().blackboard {
+                    input.force_draw()?;
+                }
                 selected.output = output;
                 selected.epoch = selected
                     .epoch
                     .checked_add(1)
                     .ok_or("source epoch exhausted")?;
                 return Ok(Some(
-                    json!({"type": "source_selected", "request_id": request_id, "selected": selected.metadata()}),
+                    json!({"type": "source_selected", "request_id": request_id, "selected": selected.metadata(), "canvas": scene.canvas(), "mode":input.mode().as_str()}),
                 ));
             }
-            if !source_ready
-                && matches!(
-                    command,
-                    "pointer" | "commit" | "begin_commit" | "commit_chunk" | "finish_commit"
-                )
-            {
-                return Err(
-                    "input suspended until the selected video geometry is acknowledged".to_owned(),
-                );
-            }
+            require_ready(command, source_ready)?;
             process_command(&message, &scene, input, &mut transaction)
         })();
         let response = match response {
             Ok(response) => response,
             Err(error) => {
-                write_json_line(
-                    reader.get_mut(),
-                    &json!({"type": "error", "message": error}),
-                )?;
+                write_json_line(reader.get_mut(), &command_error(&message, &error))?;
                 continue;
             }
         };
@@ -451,6 +442,39 @@ fn serve_authenticated(
     }
 }
 
+fn require_ready(command: &str, ready: bool) -> Result<(), String> {
+    if !ready
+        && matches!(
+            command,
+            "pointer"
+                | "commit"
+                | "begin_commit"
+                | "commit_chunk"
+                | "finish_commit"
+                | "select_object"
+                | "transform_object"
+                | "set_canvas"
+                | "laser"
+                | "undo"
+                | "redo"
+                | "clear"
+                | "clear_display"
+                | "set_mode"
+        )
+    {
+        return Err("input suspended until the selected video geometry is acknowledged".into());
+    }
+    Ok(())
+}
+
+fn command_error(message: &Value, error: &str) -> Value {
+    json!({"type":"error","message":error,"request_id":message["request_id"],"source_epoch":message["source_epoch"]})
+}
+
+fn source_ready_ack(message: &Value, canvas: Canvas, mode: Mode) -> Value {
+    json!({"type":"source_ready_ack","source_epoch":message["source_epoch"],"canvas":canvas,"mode":mode.as_str()})
+}
+
 fn process_command(
     message: &Value,
     scene: &Arc<Mutex<Scene>>,
@@ -458,7 +482,74 @@ fn process_command(
     transaction: &mut Option<CommitTransaction>,
 ) -> Result<Option<Value>, String> {
     let command = message.get("type").and_then(Value::as_str).unwrap_or("");
-    match command {
+    if matches!(
+        command,
+        "commit"
+            | "begin_commit"
+            | "commit_chunk"
+            | "finish_commit"
+            | "select_object"
+            | "transform_object"
+            | "laser"
+    ) && input.mode() != Mode::Draw
+    {
+        return Err("editing and laser require Draw mode".into());
+    }
+    let response = match command {
+        "select_object" | "transform_object" | "set_canvas" => {
+            let request_id = message["request_id"]
+                .as_u64()
+                .ok_or("editor request id missing")?;
+            let mut scene = scene
+                .lock()
+                .map_err(|_| "canonical scene lock is poisoned")?;
+            let selection = match command {
+                "select_object" => scene.select(command_point(message)?, input.aspect())?,
+                "transform_object" => {
+                    let id = message["object_id"].as_u64().ok_or("object id missing")?;
+                    let transform: Transform = serde_json::from_value(message["transform"].clone())
+                        .map_err(|e| format!("invalid transform: {e}"))?;
+                    Some(scene.transform_object(id, transform, input.aspect())?)
+                }
+                _ => {
+                    let canvas = Canvas {
+                        blackboard: message["blackboard"]
+                            .as_bool()
+                            .ok_or("blackboard flag missing")?,
+                        grid: message["grid"].as_bool().ok_or("grid flag missing")?,
+                    };
+                    input.release_all()?;
+                    if canvas.blackboard {
+                        input.force_draw()?;
+                    }
+                    scene.set_canvas(canvas)?;
+                    None
+                }
+            };
+            Ok(Some(
+                json!({"type":"editor_ack","request_id":request_id,"source_epoch":message["source_epoch"],"selection":selection,"canvas":scene.canvas(),"mode":input.mode().as_str()}),
+            ))
+        }
+        "laser" => {
+            let active = message["active"]
+                .as_bool()
+                .ok_or("laser active flag missing")?;
+            let mut scene = scene
+                .lock()
+                .map_err(|_| "canonical scene lock is poisoned")?;
+            if active {
+                let rgba = if message["rgba"].is_null() {
+                    [255, 0, 0, 255]
+                } else {
+                    serde_json::from_value(message["rgba"].clone())
+                        .map_err(|e| format!("invalid laser color: {e}"))?
+                };
+                scene.set_laser(true, command_point(message)?, rgba)?;
+            } else {
+                scene.clear_laser();
+            }
+            Ok(None)
+        }
         "commit" => {
             let object: InkObject = serde_json::from_value(
                 message
@@ -571,11 +662,25 @@ fn process_command(
                 .and_then(Value::as_str)
                 .ok_or("mode change is missing its mode")?;
             let mode = Mode::parse(mode)?;
+            if mode == Mode::Pointer
+                && scene
+                    .lock()
+                    .map_err(|_| "scene lock poisoned")?
+                    .canvas()
+                    .blackboard
+            {
+                input.force_draw()?;
+                return Err("Pointer mode is unavailable on the blackboard".into());
+            }
             let request_id = message
                 .get("request_id")
                 .and_then(Value::as_u64)
                 .ok_or("mode change has an invalid request id")?;
             input.set_mode(mode, request_id)?;
+            scene
+                .lock()
+                .map_err(|_| "scene lock poisoned")?
+                .clear_laser();
             Ok(Some(json!({
                 "type": "mode_ack",
                 "mode": mode.as_str(),
@@ -604,6 +709,7 @@ fn process_command(
             Ok(ack.then(|| json!({"type": "ack"})))
         }
         "undo" => {
+            input.release_all()?;
             scene
                 .lock()
                 .map_err(|_| "canonical scene lock is poisoned".to_owned())?
@@ -611,6 +717,7 @@ fn process_command(
             Ok(Some(json!({"type": "ack"})))
         }
         "redo" => {
+            input.release_all()?;
             scene
                 .lock()
                 .map_err(|_| "canonical scene lock is poisoned".to_owned())?
@@ -618,6 +725,7 @@ fn process_command(
             Ok(Some(json!({"type": "ack"})))
         }
         "clear" => {
+            input.release_all()?;
             scene
                 .lock()
                 .map_err(|_| "canonical scene lock is poisoned".to_owned())?
@@ -630,6 +738,7 @@ fn process_command(
                 .and_then(Value::as_u64)
                 .filter(|request_id| *request_id > 0)
                 .ok_or("display clear has an invalid request id")?;
+            input.release_all()?;
             scene
                 .lock()
                 .map_err(|_| "canonical scene lock is poisoned".to_owned())?
@@ -641,9 +750,31 @@ fn process_command(
         }
         "heartbeat" => Ok(None),
         _ => Err(format!("unknown command type {command:?}")),
+    }?;
+    if matches!(command, "undo" | "redo" | "clear" | "clear_display") {
+        let scene = scene
+            .lock()
+            .map_err(|_| "canonical scene lock is poisoned")?;
+        if scene.canvas().blackboard {
+            input.force_draw()?;
+        }
+        return Ok(response.map(|mut response| {
+            response["request_id"] = message["request_id"].clone();
+            response["source_epoch"] = message["source_epoch"].clone();
+            response["canvas"] = json!(scene.canvas());
+            response["mode"] = json!(input.mode().as_str());
+            response
+        }));
     }
+    Ok(response)
 }
 
+fn command_point(message: &Value) -> Result<Point, String> {
+    Ok(Point {
+        x: message["x"].as_f64().ok_or("x coordinate missing")? as f32,
+        y: message["y"].as_f64().ok_or("y coordinate missing")? as f32,
+    })
+}
 pub(crate) fn read_json_line<R: BufRead>(reader: &mut R) -> io::Result<Value> {
     let mut bytes = Vec::with_capacity(256);
     loop {
@@ -723,6 +854,186 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    fn test_input() -> WindowsInput {
+        WindowsInput::new(OutputBounds {
+            left: 0,
+            top: 0,
+            width: 200,
+            height: 100,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn editor_ack_contains_selection_bounds_canvas_mode_and_correlation() {
+        let scene = Arc::new(Mutex::new(Scene::demo()));
+        let mut input = test_input();
+        let mut transaction = None;
+        let selected = process_command(
+            &json!({"type":"select_object","x":0.1,"y":0.72,"request_id":12,"source_epoch":3}),
+            &scene,
+            &mut input,
+            &mut transaction,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected["type"], "editor_ack");
+        assert_eq!(selected["request_id"], 12);
+        assert_eq!(selected["source_epoch"], 3);
+        assert_eq!(selected["selection"]["id"], 1);
+        assert_eq!(selected["mode"], "draw");
+        assert_eq!(selected["canvas"], json!({"blackboard":false,"grid":false}));
+        let transform = Transform {
+            tx: 0.1,
+            ..Default::default()
+        };
+        let transformed=process_command(&json!({"type":"transform_object","object_id":1,"transform":transform,"request_id":13,"source_epoch":3}),
+            &scene,&mut input,&mut transaction).unwrap().unwrap();
+        assert!(
+            (transformed["selection"]["bounds"]["left"].as_f64().unwrap() - 0.2).abs() < 0.00001
+        );
+        assert_eq!(transformed["selection"]["transform"], json!(transform));
+        let missed = process_command(
+            &json!({"type":"select_object","x":0.01,"y":0.01,"request_id":14,"source_epoch":3}),
+            &scene,
+            &mut input,
+            &mut transaction,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(missed["selection"].is_null());
+        assert!(process_command(&json!({"type":"transform_object","object_id":1,"transform":{},"request_id":15,"source_epoch":3}),
+            &scene,&mut input,&mut transaction).is_err());
+    }
+
+    #[test]
+    fn blackboard_forces_draw_and_clear_history_acknowledges_full_canvas_state() {
+        let scene = Arc::new(Mutex::new(Scene::default()));
+        let mut input = test_input();
+        let mut transaction = None;
+        input.set_mode(Mode::Pointer, 1).unwrap();
+        let board=process_command(&json!({"type":"set_canvas","blackboard":true,"grid":true,"request_id":2,"source_epoch":4}),
+            &scene,&mut input,&mut transaction).unwrap().unwrap();
+        assert_eq!(board["mode"], "draw");
+        assert!(board["selection"].is_null());
+        assert!(
+            process_command(
+                &json!({"type":"set_mode","mode":"pointer","request_id":3}),
+                &scene,
+                &mut input,
+                &mut transaction
+            )
+            .is_err()
+        );
+        let clear = process_command(
+            &json!({"type":"clear_display","request_id":4,"source_epoch":4}),
+            &scene,
+            &mut input,
+            &mut transaction,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(clear["type"], "clear_ack");
+        assert_eq!(clear["canvas"], json!({"blackboard":false,"grid":false}));
+        assert_eq!(clear["source_epoch"], 4);
+        input.set_mode(Mode::Pointer, 5).unwrap();
+        let undo = process_command(
+            &json!({"type":"undo","request_id":6,"source_epoch":4}),
+            &scene,
+            &mut input,
+            &mut transaction,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(undo["type"], "ack");
+        assert_eq!(undo["request_id"], 6);
+        assert_eq!(undo["mode"], "draw");
+        assert_eq!(undo["canvas"], json!({"blackboard":true,"grid":true}));
+        let redo = process_command(
+            &json!({"type":"redo","request_id":7,"source_epoch":4}),
+            &scene,
+            &mut input,
+            &mut transaction,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(redo["canvas"], json!({"blackboard":false,"grid":false}));
+        // Policy-enforced Draw did not consume a tablet mode request number.
+        input.set_mode(Mode::Pointer, 8).unwrap();
+    }
+
+    #[test]
+    fn laser_is_draw_only_unacknowledged_transient_and_uses_default_red() {
+        let scene = Arc::new(Mutex::new(Scene::default()));
+        let mut input = test_input();
+        let mut transaction = None;
+        let active = json!({"type":"laser","active":true,"x":0.5,"y":0.5,"source_epoch":1});
+        assert!(
+            process_command(&active, &scene, &mut input, &mut transaction)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            scene.lock().unwrap().laser().unwrap().rgba,
+            [255, 0, 0, 255]
+        );
+        assert!(!scene.lock().unwrap().undo());
+        assert!(
+            process_command(
+                &json!({"type":"laser","active":false}),
+                &scene,
+                &mut input,
+                &mut transaction
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(scene.lock().unwrap().laser().is_none());
+        input.set_mode(Mode::Pointer, 1).unwrap();
+        assert!(process_command(&active, &scene, &mut input, &mut transaction).is_err());
+    }
+
+    #[test]
+    fn editing_requires_ready_geometry_and_errors_preserve_request_epoch() {
+        for command in [
+            "select_object",
+            "transform_object",
+            "set_canvas",
+            "laser",
+            "commit",
+            "finish_commit",
+            "undo",
+            "redo",
+            "clear",
+            "clear_display",
+            "set_mode",
+        ] {
+            assert!(require_ready(command, false).is_err());
+            require_ready(command, true).unwrap();
+        }
+        require_ready("heartbeat", false).unwrap();
+        let error = command_error(
+            &json!({"type":"transform_object","request_id":99,"source_epoch":7}),
+            "bad matrix",
+        );
+        assert_eq!(
+            error,
+            json!({"type":"error","message":"bad matrix","request_id":99,"source_epoch":7})
+        );
+        let ready = source_ready_ack(
+            &json!({"source_epoch":7}),
+            Canvas {
+                blackboard: true,
+                grid: true,
+            },
+            Mode::Draw,
+        );
+        assert_eq!(
+            ready,
+            json!({"type":"source_ready_ack","source_epoch":7,"canvas":{"blackboard":true,"grid":true},"mode":"draw"})
+        );
+    }
 
     #[test]
     fn only_loopback_and_private_addresses_are_allowed() {

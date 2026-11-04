@@ -112,8 +112,8 @@ physical PC display, then Clear and verify both surfaces are blank.
 Rebuild both host and APK for protocol version 2, install the APK, and run
 `E:\dev\DrawDock\Start-DrawDockHost.ps1 -Restart`. Pair and approve viewing,
 annotation and pointer access. The monitor dropdown at the top lists the PC
-outputs. **Tools** reopens the floating controls; **Hide tools** closes them.
-Controls overlay the image rather than reserving drawing space. The video fills
+outputs. **Settings** reopens connection/pairing controls. Drawing controls are
+in the pen radial menu described below. Controls overlay the image rather than reserving drawing space. The video fills
 the largest available aspect-fit rectangle; letterbox margins are not ink
 targets. Changing the monitor cancels active pen contact and waits for video
 geometry acknowledgement before allowing new input.
@@ -133,3 +133,59 @@ hands off on pen-up and can momentarily disappear before the captured ink
 arrives. Reconciliation latency/watermarks and fullscreen acceptance are not
 passed. If video fails or its bounded queue overflows, drawing is suspended
 and the app reports that reconnection is required.
+
+## Pen radial menu and expanded tools
+
+Update **both** the host and APK. Hold the pen still on the mirrored image for
+about 550 ms, lift it, then tap a circular menu button. The menu opens near the
+contact and moves inward at edges to keep its buttons accessible. Finger holds
+do not open it. **Pen tools** in the header is an accessible fallback. The center
+button closes the root or returns from a submenu. In Pointer mode, mouse-down is
+deferred until a drag or short tap is recognized: opening the menu must not
+click the application underneath.
+
+| Menu | Actions |
+|---|---|
+| Pen | Freehand, translucent highlighter, temporary laser |
+| Shapes | Rectangle, circle, ellipse, line, polygon, polyline, arrow, text |
+| Select / Edit | Select/move, rotate, resize, mirror horizontally/vertically, deselect |
+| Style | Colors including white; thin, medium and thick strokes/text sizes |
+| Board / Grid | Shared PC blackboard and grid toggles |
+| More | Draw/Pointer mode, finish/cancel path, paste image, Clear all, Settings |
+
+Tap polygon/polyline vertices individually; long-press and choose **More >
+Finish path** (minimum three/two vertices). Long-press does not add a vertex.
+Changing tool/style, source or session cancels unfinished paths. Text is placed
+by tapping the image, typing up to 512 characters/eight lines, and choosing
+**Place**. Circle drags define a square bounding box; drag diagonally.
+
+Choose **Select / Move**, tap an object, then drag inside its blue bounds.
+For Rotate, drag around the selected bounds' center; for Resize, drag to change
+width/height. Mirror is applied immediately to the selected object. Selection
+is single-object, topmost bounding-box based; transformation preview shows a
+moving bounding frame, and the actual PC object updates on pen-up. Undo/redo
+include transforms and presentation backgrounds. Clear removes drawings, text,
+images, Blackboard and Grid together, and waits for the PC acknowledgement.
+Blackboard prevents Pointer mode so a concealed desktop cannot be clicked.
+
+**Paste image** imports an image URI explicitly copied to the **tablet**
+clipboard, not the PC clipboard and not a copied URL/text. No clipboard monitor,
+extra storage permission or automatic upload is added. The image is decoded on
+a worker, orientation-corrected, bounded to 1280 pixels on its longest edge and
+reduced further when needed to fit 320 KiB of lossless PNG. Source images above
+32 megapixels are rejected explicitly. Paste centers the image and activates
+Select / Move; once the image appears, tap it to select and edit. Queueing is
+not reported as confirmed PC insertion. The PC independently validates and
+re-encodes the bounded PNG.
+
+The existing app lifecycle still ends its session when backgrounded. Copy the
+image **before connecting**, or reconnect after copying; backgrounding clears
+the previous host session's annotations. Clipboard-provider and real-pen
+acceptance remain manual checks, not inferred from APK installation.
+
+Synthetic ADB stylus checks on the connected tablet verified finger exclusion,
+movement cancellation, long-press opening, menu action reachability, correctly
+sized circular buttons and corner clamping. They are **not** evidence of real
+hardware pen input, clipboard-provider compatibility, pointer injection or
+fullscreen/physical PC visual acceptance. Manually exercise every tool on the
+physical PC/projector, including all transformations and shared backgrounds.

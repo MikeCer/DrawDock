@@ -6,6 +6,17 @@ enum class DrawTool {
     ARROW,
     RECTANGLE,
     ELLIPSE,
+    CIRCLE,
+    LINE,
+    POLYGON,
+    POLYLINE,
+    TEXT,
+    IMAGE,
+    HIGHLIGHTER,
+    LASER,
+    SELECT_MOVE,
+    ROTATE,
+    RESIZE,
 }
 
 data class PenSample(
@@ -54,12 +65,12 @@ class InputReducer {
         if (activePointerId != pointerId) return InputResult.Ignored
 
         if (action == MotionEvent.ACTION_MOVE) {
-            return sample?.let(InputResult::Moved) ?: InputResult.Ignored
+            return sample?.takeIf { it.isPenLike() }?.let(InputResult::Moved) ?: InputResult.Ignored
         }
 
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
             activePointerId = null
-            return sample?.let { InputResult.Ended(it, canceled) } ?: InputResult.Ignored
+            return InputResult.Ended(sample?.takeIf { it.isPenLike() }, canceled || sample?.isPenLike() != true)
         }
         return InputResult.Ignored
     }

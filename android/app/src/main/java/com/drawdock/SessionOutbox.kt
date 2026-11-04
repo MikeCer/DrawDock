@@ -15,8 +15,13 @@ internal class SessionOutbox {
         ) {
             commands.pollLast()
         }
+        if (tail is SessionCommand.Laser && command is SessionCommand.Laser &&
+            tail.sourceEpoch == command.sourceEpoch && tail.active && command.active
+        ) {
+            commands.pollLast()
+        }
         val isRelease = command is SessionCommand.Pointer &&
-            command.action in listOf("up", "cancel")
+            command.action in listOf("up", "cancel") || command is SessionCommand.Laser && !command.active
         val limit = if (isRelease) 129 else 128
         commands.size < limit && commands.offerLast(command)
     }
@@ -53,6 +58,11 @@ internal sealed interface SessionCommand {
     data class Mode(val mode: String, val requestId: Long, override val sourceEpoch: Long = 0) : SessionCommand
     data class ClearDisplay(val requestId: Long, override val sourceEpoch: Long = 0) : SessionCommand
     data class SelectSource(val source: String, val requestId: Long, override val sourceEpoch: Long) : SessionCommand
+    data class Editor(val json: String, override val sourceEpoch: Long) : SessionCommand
+    data class Laser(
+        val active: Boolean, val x: Float, val y: Float, val color: Int,
+        override val sourceEpoch: Long,
+    ) : SessionCommand
     data class Pointer(
         val action: String,
         val generation: Long,

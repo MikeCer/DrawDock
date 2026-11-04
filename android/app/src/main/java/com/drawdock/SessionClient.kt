@@ -32,6 +32,7 @@ class SessionClient(
     private val onStatus: (String, Boolean) -> Unit,
     private val onModeAck: (String, Long) -> Unit,
     private val onClearAck: (Long) -> Unit,
+    private val onEditorEvent: (JSONObject) -> Unit,
     private val videoSurface: Surface,
     private val onSources: (JSONArray, JSONObject) -> Unit,
     private val onSourceSelected: (JSONObject, Long) -> Unit,
@@ -51,6 +52,7 @@ class SessionClient(
     private val nextModeRequestId = AtomicLong(0)
     private val nextClearRequestId = AtomicLong(0)
     private val nextSourceRequestId = AtomicLong(0)
+    private val nextEditorRequestId = AtomicLong(1_000_000_000)
     @Volatile private var sourceEpoch = 0L
     @Volatile private var videoSocket: SSLSocket? = null
     private val pointerLock = Any()
@@ -152,7 +154,8 @@ class SessionClient(
 
     fun sendMark(mark: InkMark, viewportWidth: Int, viewportHeight: Int): Boolean {
         if (viewportWidth <= 0 || viewportHeight <= 0 || mark.points.isEmpty()) return false
-        val reserved = mark.points.size.toLong() * 8L + 256L
+        val reserved = mark.points.size.toLong() * 8L + 256L +
+            (mark.imageData?.length ?: 0) + (mark.text?.toByteArray(Charsets.UTF_8)?.size ?: 0)
         while (true) {
             val current = queuedBytes.get()
             if (current + reserved > MAX_PENDING_BYTES) {
@@ -172,6 +175,17 @@ class SessionClient(
     fun undo() = enqueue(SessionCommand.Control("undo", sourceEpoch))
     fun redo() = enqueue(SessionCommand.Control("redo", sourceEpoch))
     fun sourceReady(epoch: Long) = enqueue(SessionCommand.Control("source_ready", epoch))
+    fun editor(message: JSONObject): Long? {
+        val requestId = nextEditorRequestId.incrementAndGet()
+        message.put("request_id", requestId)
+        return requestId.takeIf { enqueue(SessionCommand.Editor(message.toString(), sourceEpoch)) }
+    }
+
+    fun sendLaser(active: Boolean, x: Float, y: Float, color: Int, width: Int, height: Int): Boolean {
+        if (width <= 0 || height <= 0) return false
+        return enqueue(SessionCommand.Laser(active, (x / width).coerceIn(0f, 1f),
+            (y / height).coerceIn(0f, 1f), color, sourceEpoch))
+    }
     fun selectSource(name: String): Long? {
         val requestId = nextSourceRequestId.incrementAndGet()
         return requestId.takeIf { enqueue(SessionCommand.SelectSource(name, requestId, sourceEpoch)) }
@@ -295,10 +309,15 @@ class SessionClient(
             while (!closed.get()) {
                 val response = readFrame(input)
                 when (response.optString("type")) {
-                    "error" -> postStatus(
-                        "Host rejected command: ${response.optString("message")}",
-                        true,
-                    )
+                    "error" -> {
+                        mainHandler.post { onEditorEvent(response) }
+                        postStatus("Host rejected command: ${response.optString("message")}", true)
+                    }
+                    "editor_ack", "ack" -> {
+                        if (response.has("canvas") || response.optString("type") == "editor_ack") {
+                            mainHandler.post { onEditorEvent(response) }
+                        }
+                    }
                     "mode_ack" -> {
                         val mode = response.optString("mode")
                         val requestId = response.optLong("request_id", -1)
@@ -308,7 +327,10 @@ class SessionClient(
                     }
                     "clear_ack" -> {
                         val requestId = response.optLong("request_id", -1)
-                        if (requestId > 0) mainHandler.post { onClearAck(requestId) }
+                        if (requestId > 0) mainHandler.post {
+                            onClearAck(requestId)
+                            onEditorEvent(response)
+                        }
                     }
                     "source_selected" -> {
                         val selected = response.getJSONObject("selected")
@@ -318,7 +340,7 @@ class SessionClient(
                     }
                     "source_ready_ack" -> {
                         val epoch = response.getLong("source_epoch")
-                        mainHandler.post { onSourceReady(epoch) }
+                        mainHandler.post { onSourceReady(epoch); onEditorEvent(response) }
                     }
                 }
             }
@@ -364,6 +386,12 @@ class SessionClient(
 
     private fun encodeCommand(command: SessionCommand): List<JSONObject> = when (command) {
         is SessionCommand.Control -> listOf(JSONObject().put("type", command.type))
+        is SessionCommand.Editor -> listOf(JSONObject(command.json))
+        is SessionCommand.Laser -> listOf(JSONObject().put("type", "laser")
+            .put("active", command.active).put("x", command.x.toDouble()).put("y", command.y.toDouble())
+            .put("rgba", JSONArray().put(android.graphics.Color.red(command.color))
+                .put(android.graphics.Color.green(command.color))
+                .put(android.graphics.Color.blue(command.color)).put(255)))
         is SessionCommand.SelectSource -> listOf(
             JSONObject().put("type", "select_source").put("source", command.source)
                 .put("request_id", command.requestId),
@@ -420,6 +448,8 @@ class SessionClient(
                     ),
             )
             .put("points", points)
+            .put("text", command.mark.text)
+            .put("image_data", command.mark.imageData)
         val objectBytes = objectValue.toString().toByteArray(Charsets.UTF_8)
         if (objectBytes.size < MAX_FRAME_BYTES) {
             return listOf(JSONObject().put("type", "commit").put("object", objectValue))

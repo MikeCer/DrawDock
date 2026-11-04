@@ -11,12 +11,62 @@
   `NVTCapacitivePen` with pressure/tilt axes.
 - Three outputs enumerate at 2560x1440: primary `\\.\DISPLAY2` at `(0,0)`,
   `\\.\DISPLAY3` at `(-2534,1440)` and `\\.\DISPLAY1` at `(1306,1440)`.
-- Rust formatting and workspace tests pass: 8 host tests and 4 scene tests.
-  Android `testDebugUnitTest assembleDebug` passes and produces the debug APK.
-- Rust clippy completes with existing warnings in `dd-scene` (`len_zero`) and
-  the rasterizer (`too_many_arguments`); no warning-as-error lint pass is claimed.
+- Latest validation: 44 ordinary Rust tests and 25 Android tests pass; both
+  applications build, Android lint passes, and Rust formatting/strict Clippy pass.
+- The two explicit native integration tests pass, including the expanded
+  authenticated editor/scene checks described below. Interactive physical pen
+  and fullscreen acceptance are not implied by those results.
 
-## Implementation and runtime evidence
+## Pen radial menu and expanded drawing toolkit
+
+The Android drawing toolbar is replaced by a hierarchical native circular menu
+opened with a stationary stylus long-press (about 550 ms). The menu is available
+in Draw/Pointer mode and even while input is waiting for readiness; these
+unready contacts cannot become drawing/clicks when the connection becomes ready.
+Pointer-down is deferred until movement exceeds slop or a short contact ends,
+so menu invocation does not click the underlying desktop. Connection/settings
+and monitor selection remain accessible at the top.
+
+All requested shape categories, single-object move/rotate/resize/mirror, text,
+laser, highlighter, blackboard/grid and explicit **tablet clipboard** image
+paste are implemented across Android and the authoritative Windows scene.
+The host uses native Rust resvg rendering, escaped plain text and Windows
+fonts, bounded/re-encoded PNG assets and physical-coordinate affine transforms.
+Canvas/history state is per monitor within the session; Clear resets backgrounds
+as requested. Blackboard forces Draw, including when restored by Undo, to avoid
+injecting mouse clicks into a concealed desktop. Laser is expiring state, not
+stored ink. No new system installation, public listener or trust bypass was added.
+
+Validation evidence:
+
+- 44 ordinary Rust tests pass; native renderer tests cover text, images,
+  transformed shapes and backgrounds. Formatting, strict Clippy and host build
+  pass.
+- The isolated pinned-TLS reconnect test now exercises new-tool/text/PNG commits,
+  exact selection/transform responses, correlated errors, canvas synchronization,
+  board Pointer rejection and Undo/Redo/Clear. Desktop pixel sampling verifies
+  PNG/blackboard presentation, with DPI-aware geometry and heartbeat-backed waits.
+  The existing two-monitor x264/NVENC video test also passes. Test hosts and
+  fixture trust stores were cleaned up; actual saved trust was untouched.
+- 25 Android unit tests, APK build and lint pass. The updated APK is installed
+  and its process launched on the authorized tablet.
+- After the owner unlocked the tablet, synthetic ADB stylus checks passed
+  stationary opening, moving-contact cancellation, finger-hold exclusion,
+  action reachability, correct button sizing and corner clamping. The first
+  real UI inspection caught oversized radial button layout bounds; explicit
+  child measurement/layout fixed that issue and the device smoke test passed.
+
+**Windows remains PARTIAL.** Synthetic stylus injection and desktop framebuffer
+sampling are not proof of actual tablet pen input on a physical monitor/projector.
+Real-pen long-press/Pointer click safety, all tool visuals over live/fullscreen
+applications, actual clipboard-provider interoperability and transform ergonomics
+still need owner acceptance. Transform preview is a bounding frame; the PC
+object commits on pen-up. The existing background/disconnect lifecycle clears
+session annotations, so copy a clipboard image before connecting. Capture
+watermarks, latency/soak and Wi-Fi gates remain unchanged. Linux/GNOME and QUIC
+remain **DEFERRED**.
+
+## Earlier implementation and runtime evidence
 
 `dd-scene` validates bounded normalized objects and history. `dd-host` compiles a
 Windows layered presenter, TLS/TCP pairing service and `SendInput` pointer

@@ -1,4 +1,7 @@
-use dd_scene::{InkObject, Scene, Tool};
+use dd_scene::Scene;
+#[path = "raster.rs"]
+mod raster;
+use raster::render;
 use std::{
     ffi::c_void,
     io,
@@ -299,8 +302,8 @@ unsafe fn show_layered_window(
     let mut current_scene = scene
         .lock()
         .map_err(|_| "canonical scene lock is poisoned".to_owned())?
-        .clone();
-    render(&current_scene, width as usize, height as usize, pixels);
+        .render_snapshot();
+    render(&current_scene, width as usize, height as usize, pixels)?;
     // SAFETY: GetModuleHandleW(null) retrieves this process module handle.
     let instance = unsafe { GetModuleHandleW(null()) };
     if instance.is_null() {
@@ -512,13 +515,25 @@ unsafe fn show_layered_window(
             thread::sleep(Duration::from_millis(16));
         }
 
-        let updated_scene = scene
-            .lock()
-            .map_err(|_| "canonical scene lock is poisoned".to_owned())?
-            .clone();
-        if updated_scene.revision() != current_scene.revision() {
+        let updated_scene = {
+            let mut scene = scene
+                .lock()
+                .map_err(|_| "canonical scene lock is poisoned")?;
+            scene.tick();
+            (scene.revision() != current_scene.revision()).then(|| scene.render_snapshot())
+        };
+        if let Some(updated_scene) = updated_scene {
             current_scene = updated_scene;
-            render(&current_scene, width as usize, height as usize, pixels);
+            if let Err(error) = render(&current_scene, width as usize, height as usize, pixels) {
+                unsafe {
+                    SetConsoleCtrlHandler(Some(console_control), 0);
+                    SelectObject(dc, old_bitmap);
+                    DeleteObject(bitmap);
+                    DeleteDC(dc);
+                    DestroyWindow(hwnd);
+                }
+                return Err(error);
+            }
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     pixels.as_ptr(),
@@ -563,233 +578,6 @@ unsafe fn show_layered_window(
     Ok(switched)
 }
 
-fn render(scene: &Scene, width: usize, height: usize, pixels: &mut [u8]) {
-    pixels.fill(0);
-    for object in scene.objects() {
-        draw_object(object, width, height, pixels);
-    }
-}
-
-fn draw_object(object: &InkObject, width: usize, height: usize, pixels: &mut [u8]) {
-    let to_pixel = |point: dd_scene::Point| {
-        (
-            f64::from(point.x) * (width.saturating_sub(1)) as f64,
-            f64::from(point.y) * (height.saturating_sub(1)) as f64,
-        )
-    };
-    let thickness = f64::from(object.style.width) * width.min(height) as f64;
-    match object.tool {
-        Tool::Freehand => {
-            if object.points.len() == 1 {
-                let (x, y) = to_pixel(object.points[0]);
-                stroke_segment(
-                    pixels,
-                    width,
-                    height,
-                    x,
-                    y,
-                    x,
-                    y,
-                    thickness,
-                    object.style.rgba,
-                );
-            } else {
-                for segment in object.points.windows(2) {
-                    let (x0, y0) = to_pixel(segment[0]);
-                    let (x1, y1) = to_pixel(segment[1]);
-                    stroke_segment(
-                        pixels,
-                        width,
-                        height,
-                        x0,
-                        y0,
-                        x1,
-                        y1,
-                        thickness,
-                        object.style.rgba,
-                    );
-                }
-            }
-        }
-        Tool::Arrow => {
-            let (x0, y0) = to_pixel(object.points[0]);
-            let (x1, y1) = to_pixel(object.points[1]);
-            stroke_segment(
-                pixels,
-                width,
-                height,
-                x0,
-                y0,
-                x1,
-                y1,
-                thickness,
-                object.style.rgba,
-            );
-            let angle = (y1 - y0).atan2(x1 - x0);
-            let head = (width.min(height) as f64 * 0.022).max(thickness * 3.0);
-            for delta in [-0.55_f64, 0.55_f64] {
-                let angle = angle + std::f64::consts::PI + delta;
-                stroke_segment(
-                    pixels,
-                    width,
-                    height,
-                    x1,
-                    y1,
-                    x1 + angle.cos() * head,
-                    y1 + angle.sin() * head,
-                    thickness,
-                    object.style.rgba,
-                );
-            }
-        }
-        Tool::Rectangle => {
-            let (x0, y0) = to_pixel(object.points[0]);
-            let (x1, y1) = to_pixel(object.points[1]);
-            let (left, right) = (x0.min(x1), x0.max(x1));
-            let (top, bottom) = (y0.min(y1), y0.max(y1));
-            for (sx, sy, ex, ey) in [
-                (left, top, right, top),
-                (right, top, right, bottom),
-                (right, bottom, left, bottom),
-                (left, bottom, left, top),
-            ] {
-                stroke_segment(
-                    pixels,
-                    width,
-                    height,
-                    sx,
-                    sy,
-                    ex,
-                    ey,
-                    thickness,
-                    object.style.rgba,
-                );
-            }
-        }
-        Tool::Ellipse => {
-            let (x0, y0) = to_pixel(object.points[0]);
-            let (x1, y1) = to_pixel(object.points[1]);
-            stroke_ellipse(
-                pixels,
-                width,
-                height,
-                (x0 + x1) / 2.0,
-                (y0 + y1) / 2.0,
-                ((x1 - x0) / 2.0).abs(),
-                ((y1 - y0) / 2.0).abs(),
-                thickness,
-                object.style.rgba,
-            );
-        }
-    }
-}
-
-fn stroke_segment(
-    pixels: &mut [u8],
-    width: usize,
-    height: usize,
-    x0: f64,
-    y0: f64,
-    x1: f64,
-    y1: f64,
-    thickness: f64,
-    color: [u8; 4],
-) {
-    let radius = thickness.max(1.0) / 2.0;
-    let left = (x0.min(x1) - radius - 1.0).floor().max(0.0) as usize;
-    let top = (y0.min(y1) - radius - 1.0).floor().max(0.0) as usize;
-    let right = (x0.max(x1) + radius + 1.0)
-        .ceil()
-        .min(width.saturating_sub(1) as f64) as usize;
-    let bottom = (y0.max(y1) + radius + 1.0)
-        .ceil()
-        .min(height.saturating_sub(1) as f64) as usize;
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let length2 = dx * dx + dy * dy;
-    for y in top..=bottom {
-        for x in left..=right {
-            let px = x as f64 + 0.5;
-            let py = y as f64 + 0.5;
-            let t = if length2 == 0.0 {
-                0.0
-            } else {
-                (((px - x0) * dx + (py - y0) * dy) / length2).clamp(0.0, 1.0)
-            };
-            let ex = x0 + t * dx;
-            let ey = y0 + t * dy;
-            if (px - ex).hypot(py - ey) <= radius {
-                blend_pixel(pixels, width, x, y, color);
-            }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn stroke_ellipse(
-    pixels: &mut [u8],
-    width: usize,
-    height: usize,
-    cx: f64,
-    cy: f64,
-    rx: f64,
-    ry: f64,
-    thickness: f64,
-    color: [u8; 4],
-) {
-    if rx < 1.0 || ry < 1.0 {
-        stroke_segment(
-            pixels,
-            width,
-            height,
-            cx - rx,
-            cy - ry,
-            cx + rx,
-            cy + ry,
-            thickness,
-            color,
-        );
-        return;
-    }
-    let margin = thickness.max(1.0) / 2.0 + 1.0;
-    let left = (cx - rx - margin).floor().max(0.0) as usize;
-    let top = (cy - ry - margin).floor().max(0.0) as usize;
-    let right = (cx + rx + margin)
-        .ceil()
-        .min(width.saturating_sub(1) as f64) as usize;
-    let bottom = (cy + ry + margin)
-        .ceil()
-        .min(height.saturating_sub(1) as f64) as usize;
-    let pixel_radius = thickness.max(1.0) / 2.0;
-    for y in top..=bottom {
-        for x in left..=right {
-            let nx = (x as f64 + 0.5 - cx) / rx;
-            let ny = (y as f64 + 0.5 - cy) / ry;
-            let distance = ((nx * nx + ny * ny).sqrt() - 1.0).abs() * rx.min(ry);
-            if distance <= pixel_radius {
-                blend_pixel(pixels, width, x, y, color);
-            }
-        }
-    }
-}
-
-fn blend_pixel(pixels: &mut [u8], width: usize, x: usize, y: usize, rgba: [u8; 4]) {
-    let offset = (y * width + x) * 4;
-    let alpha = u16::from(rgba[3]);
-    let inverse_alpha = 255 - alpha;
-    let source = [
-        (u16::from(rgba[2]) * alpha / 255) as u8,
-        (u16::from(rgba[1]) * alpha / 255) as u8,
-        (u16::from(rgba[0]) * alpha / 255) as u8,
-        rgba[3],
-    ];
-    for (channel, source_value) in source.into_iter().enumerate() {
-        let destination = u16::from(pixels[offset + channel]);
-        let value = u16::from(source_value) + destination * inverse_alpha / 255;
-        pixels[offset + channel] = value.min(255) as u8;
-    }
-}
-
 fn last_error(operation: &str) -> String {
     let error = io::Error::last_os_error();
     format!("{operation} failed: {error}")
@@ -798,7 +586,7 @@ fn last_error(operation: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dd_scene::{InkStyle, Point as ScenePoint};
+    use dd_scene::{InkObject, InkStyle, Point as ScenePoint, Tool, Transform};
 
     #[test]
     fn rasterizes_scene_into_premultiplied_bgra_pixels() {
@@ -812,21 +600,24 @@ mod tests {
                     width: 0.05,
                 },
                 points: vec![ScenePoint { x: 0.5, y: 0.5 }],
+                text: None,
+                image_data: None,
+                transform: Transform::default(),
             })
             .unwrap();
         let mut pixels = vec![0; 20 * 20 * 4];
-        render(&scene, 20, 20, &mut pixels);
+        render(&scene, 20, 20, &mut pixels).unwrap();
         let painted = &pixels[(9 * 20 + 9) * 4..(9 * 20 + 9) * 4 + 4];
-        assert_eq!(painted, &[0, 0, 128, 128]);
+        assert!(painted[2] > 0 && painted[2] == painted[3] && painted[0] == 0 && painted[1] == 0);
         let first_frame = pixels.clone();
-        render(&scene, 20, 20, &mut pixels);
+        render(&scene, 20, 20, &mut pixels).unwrap();
         assert_eq!(pixels, first_frame);
 
         scene.clear().unwrap();
-        render(&scene, 20, 20, &mut pixels);
+        render(&scene, 20, 20, &mut pixels).unwrap();
         assert!(pixels.iter().all(|pixel| *pixel == 0));
         scene.undo();
-        render(&scene, 20, 20, &mut pixels);
+        render(&scene, 20, 20, &mut pixels).unwrap();
         assert_eq!(pixels, first_frame);
     }
 }
