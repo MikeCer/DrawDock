@@ -32,6 +32,14 @@ Paths below are relative to the repository root.
 the host binary has a Windows-only compile guard. Android and Rust share a
 wire contract, not a common source library.
 
+Rust unit tests live in each crate's `tests\unit` folder, one file per
+component. Production modules include them with `#[cfg(test)]` and `#[path]`;
+they remain child modules so private implementation details need not become
+public for testing. Keep new unit tests in these files rather than inline.
+Android JVM tests live in `android\app\src\test\java\com\drawdock`, separate
+from production code in `src\main`; future device tests belong in `src\androidTest`.
+Existing test commands and Rust test filters are unchanged.
+
 ### Launcher and listener ownership
 
 The native launcher starts one sibling `dd-host.exe serve-managed` without a
