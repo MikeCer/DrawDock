@@ -2,7 +2,7 @@ use crate::source::{SelectedSource, SharedSource};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde_json::json;
 use std::{
-    io::{BufReader, Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     os::windows::process::CommandExt,
     process::{Child, Command, Stdio},
@@ -17,7 +17,6 @@ use std::{
 
 const MAX_ACCESS_UNIT: usize = 8 * 1024 * 1024;
 const FPS: u32 = 30;
-// Decoder recreation on zoom/source changes can briefly stall the TLS consumer.
 const FRAME_HANDOFF_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug)]
@@ -217,6 +216,9 @@ fn accept_video(
             eprintln!("Rejected unauthorized video connection.");
             continue;
         }
+        if request["version"] != 2 {
+            return Err("incompatible video protocol; update the DrawDock Android app".into());
+        }
         let result = stream_video(reader.get_mut(), source, stopped, encoder);
         if let Err(error) = &result {
             let _ = write_packet(reader.get_mut(), 3, 0, error.as_bytes());
@@ -254,7 +256,7 @@ pub fn probe(
             .frames
             .recv_timeout(Duration::from_secs(10))
             .map_err(|error| format!("capture probe: {error}"))??;
-        total += frame.len();
+        total += frame.bytes.len();
     }
     let (width, height) = encoded_size(selected.output.width(), selected.output.height());
     println!(
@@ -270,7 +272,12 @@ struct Capture {
     child: Child,
     stopped: Arc<AtomicBool>,
     reader: Option<JoinHandle<()>>,
-    frames: mpsc::Receiver<Result<Vec<u8>, String>>,
+    frames: mpsc::Receiver<Result<EncodedFrame, String>>,
+}
+
+struct EncodedFrame {
+    capture_us: u64,
+    bytes: Vec<u8>,
 }
 
 impl Capture {
@@ -291,6 +298,7 @@ impl Capture {
             "-loglevel",
             "error",
             "-nostdin",
+            "-copyts",
             "-f",
             "gdigrab",
             "-draw_mouse",
@@ -306,15 +314,25 @@ impl Capture {
             "-i",
             "desktop",
             "-an",
+            "-map",
+            "0:v",
             "-vf",
             &format!("scale={width}:{height}:flags=lanczos:out_color_matrix=bt709:out_range=tv"),
         ]);
         encoder.configure(&mut command);
         let mut child = command
-            .args(["-flush_packets", "1", "-f", "h264", "pipe:1"])
+            .args([
+                "-fps_mode",
+                "passthrough",
+                "-enc_time_base",
+                "1:1000000",
+                "-f",
+                "tee",
+                "[f=framecrc:flush_packets=1]pipe:2|[f=h264:flush_packets=1]pipe:1",
+            ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .creation_flags(0x0800_0000)
             .spawn()
             .map_err(|error| {
@@ -324,6 +342,13 @@ impl Capture {
                 )
             })?;
         let stdout = child.stdout.take().ok_or("FFmpeg stdout is unavailable")?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or("FFmpeg packet metadata is unavailable")?;
+        if std::env::var("DRAWDOCK_PERF_TRACE").as_deref() == Ok("1") {
+            println!("PERF capture_started epoch={}", source.epoch);
+        }
         let (tx, frames) = mpsc::sync_channel(1);
         let stopped = Arc::new(AtomicBool::new(false));
         let stop = Arc::clone(&stopped);
@@ -331,17 +356,56 @@ impl Capture {
             .name("drawdock-h264-reader".into())
             .spawn(move || {
                 let mut reader = BufReader::new(stdout);
-                let mut splitter = AccessUnits::default();
-                let mut bytes = [0; 8192];
+                let mut metadata = BufReader::new(stderr);
                 let result = (|| -> Result<(), String> {
+                    let mut microsecond_timebase = false;
+                    let mut last_pts = 0;
                     loop {
-                        let count = reader.read(&mut bytes).map_err(|error| error.to_string())?;
+                        let mut line = Vec::new();
+                        let count = metadata
+                            .by_ref()
+                            .take(1025)
+                            .read_until(b'\n', &mut line)
+                            .map_err(|error| format!("read FFmpeg packet metadata: {error}"))?;
                         if count == 0 {
                             return Err("native capture/encoder exited".into());
                         }
-                        for frame in splitter.push(&bytes[..count])? {
-                            send_frame(&tx, frame, &stop)?;
+                        if count > 1024 || !line.ends_with(b"\n") {
+                            return Err(
+                                "FFmpeg packet metadata line is too long or incomplete".into()
+                            );
                         }
+                        let line = std::str::from_utf8(&line)
+                            .map_err(|_| "invalid FFmpeg metadata encoding")?
+                            .trim();
+                        if line.starts_with('#') {
+                            if line.starts_with("#tb ") {
+                                if line != "#tb 0: 1/1000000" {
+                                    return Err(
+                                        "FFmpeg did not preserve microsecond capture timestamps"
+                                            .into(),
+                                    );
+                                }
+                                microsecond_timebase = true;
+                            }
+                            continue;
+                        }
+                        if !microsecond_timebase {
+                            return Err(format!("FFmpeg failed before packet timebase: {line}"));
+                        }
+                        let (capture_us, size) = parse_packet_metadata(line)?;
+                        if capture_us <= last_pts {
+                            return Err("FFmpeg capture timestamps did not increase".into());
+                        }
+                        last_pts = capture_us;
+                        let mut bytes = vec![0; size];
+                        reader
+                            .read_exact(&mut bytes)
+                            .map_err(|error| format!("read timestamped H.264 packet: {error}"))?;
+                        if !bytes.starts_with(&[0, 0, 0, 1]) && !bytes.starts_with(&[0, 0, 1]) {
+                            return Err("FFmpeg packet is not Annex-B H.264".into());
+                        }
+                        send_frame(&tx, EncodedFrame { capture_us, bytes }, &stop)?;
                     }
                 })();
                 if let Err(error) = result {
@@ -386,9 +450,9 @@ impl Drop for Capture {
     }
 }
 
-fn send_frame(
-    sender: &mpsc::SyncSender<Result<Vec<u8>, String>>,
-    frame: Vec<u8>,
+fn send_frame<T>(
+    sender: &mpsc::SyncSender<Result<T, String>>,
+    frame: T,
     stopped: &AtomicBool,
 ) -> Result<(), String> {
     let deadline = Instant::now() + FRAME_HANDOFF_TIMEOUT;
@@ -415,6 +479,11 @@ fn stream_video(
     stopped: &AtomicBool,
     encoder: VideoEncoder,
 ) -> Result<(), String> {
+    let mut frame_id = 0u64;
+    source
+        .lock()
+        .map_err(|_| "source lock poisoned")?
+        .restart_video_timeline();
     while !stopped.load(Ordering::Acquire) {
         let selected = source.lock().map_err(|_| "source lock poisoned")?.clone();
         let (width, height) = encoded_size(selected.output.width(), selected.output.height());
@@ -423,6 +492,7 @@ fn stream_video(
             "codec": "video/avc", "width": width, "height": height, "fps": FPS,
             "source": selected.output.name, "annotation_capture_mode": "included",
             "encoder": encoder.name(), "color_space": "bt709",
+            "frame_metadata": 1,
         }))
         .map_err(|error| error.to_string())?;
         write_packet(stream, 1, selected.epoch, &config)?;
@@ -430,11 +500,30 @@ fn stream_video(
             if stopped.load(Ordering::Acquire) {
                 return Ok(());
             }
-            if source.lock().map_err(|_| "source lock poisoned")?.epoch != selected.epoch {
+            if source.lock().map_err(|_| "source lock poisoned")?.output != selected.output {
                 break;
             }
             match capture.frames.recv_timeout(Duration::from_millis(100)) {
-                Ok(frame) => write_packet(stream, 2, selected.epoch, &frame?)?,
+                Ok(frame) => {
+                    let frame = frame?;
+                    let source = source.lock().map_err(|_| "source lock poisoned")?;
+                    if source.output != selected.output {
+                        break;
+                    }
+                    let presentation = source.captured_presentation(frame.capture_us)?.cloned();
+                    drop(source);
+                    frame_id = frame_id
+                        .checked_add(1)
+                        .filter(|id| *id <= i64::MAX as u64 / 1_000_000)
+                        .ok_or("video frame sequence exhausted")?;
+                    let epoch = presentation.as_ref().map_or(0, |state| state.epoch);
+                    let metadata = serde_json::to_vec(&json!({
+                        "frame_id": frame_id, "presentation": presentation,
+                    }))
+                    .map_err(|error| error.to_string())?;
+                    write_packet(stream, 4, epoch, &metadata)?;
+                    write_packet(stream, 2, epoch, &frame.bytes)?;
+                }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(
@@ -465,46 +554,24 @@ fn write_packet<W: Write>(
         .map_err(|error| format!("write bounded video packet: {error}"))
 }
 
-#[derive(Default)]
-struct AccessUnits {
-    pending: Vec<u8>,
-}
-
-impl AccessUnits {
-    fn push(&mut self, bytes: &[u8]) -> Result<Vec<Vec<u8>>, String> {
-        self.pending.extend_from_slice(bytes);
-        let mut boundaries = Vec::new();
-        let mut index = 0;
-        while index + 4 <= self.pending.len() {
-            let prefix = if self.pending[index..].starts_with(&[0, 0, 0, 1]) {
-                4
-            } else if self.pending[index..].starts_with(&[0, 0, 1]) {
-                3
-            } else {
-                index += 1;
-                continue;
-            };
-            if index + prefix < self.pending.len() && self.pending[index + prefix] & 31 == 9 {
-                boundaries.push(index);
-            }
-            index += prefix;
-        }
-        let mut frames = Vec::new();
-        for pair in boundaries.windows(2) {
-            let size = pair[1] - pair[0];
-            if size > MAX_ACCESS_UNIT {
-                return Err("H.264 access unit exceeds 8 MiB".into());
-            }
-            frames.push(self.pending[pair[0]..pair[1]].to_vec());
-        }
-        if let Some(last) = boundaries.last().copied().filter(|last| *last > 0) {
-            self.pending.drain(..last);
-        }
-        if self.pending.len() > MAX_ACCESS_UNIT {
-            return Err("H.264 access unit exceeds 8 MiB or is missing an AUD".into());
-        }
-        Ok(frames)
+fn parse_packet_metadata(line: &str) -> Result<(u64, usize), String> {
+    let fields: Vec<_> = line.split(',').map(str::trim).collect();
+    // Optional packet flags and encoder side-data follow the six fixed fields.
+    if fields.len() < 6 || fields[0] != "0" || fields[1] != fields[2] {
+        return Err(format!("invalid FFmpeg packet metadata: {line}"));
     }
+    let pts = fields[2]
+        .parse::<u64>()
+        .map_err(|_| "invalid FFmpeg capture timestamp")?;
+    let size = fields[4]
+        .parse::<usize>()
+        .ok()
+        .filter(|size| (1..=MAX_ACCESS_UNIT).contains(size))
+        .ok_or("FFmpeg packet size exceeds the H.264 limit")?;
+    if pts == 0 {
+        return Err("missing FFmpeg wall-clock capture timestamp".into());
+    }
+    Ok((pts, size))
 }
 
 #[cfg(test)]
@@ -605,7 +672,12 @@ mod tests {
                 )
                 .unwrap();
                 let mut stream = StreamOwned::new(tls, tcp);
-                writeln!(stream, "{}", json!({"type": "video", "token": token})).unwrap();
+                writeln!(
+                    stream,
+                    "{}",
+                    json!({"type": "video", "version": 2, "token": token})
+                )
+                .unwrap();
                 stream.flush().unwrap();
                 stream
             };
@@ -645,6 +717,7 @@ mod tests {
             assert_eq!(metadata["width"], expected.0);
             assert_eq!(metadata["height"], expected.1);
             for index in 0..30 {
+                assert_eq!(packet(&mut stream).0, 4);
                 let frame = packet(&mut stream);
                 assert_eq!(frame.0, 2);
                 if index == 0 {
@@ -661,21 +734,34 @@ mod tests {
             }
             {
                 let mut selected = source.lock().unwrap();
-                selected.output = outputs[1].clone();
                 selected.epoch = 2;
+            }
+            for _ in 0..15 {
+                assert_eq!(
+                    packet(&mut stream).0,
+                    4,
+                    "Zoom epoch must not restart capture"
+                );
+                assert_eq!(packet(&mut stream).0, 2);
+            }
+            {
+                let mut selected = source.lock().unwrap();
+                selected.output = outputs[1].clone();
+                selected.epoch = 3;
             }
             let mut switched = false;
             for _ in 0..90 {
                 let frame = packet(&mut stream);
-                if frame.0 == 1 && frame.1 == 2 {
+                if frame.0 == 1 && frame.1 == 3 {
                     switched = true;
                     break;
                 }
             }
             assert!(switched, "No new source configuration arrived");
             for _ in 0..30 {
+                assert_eq!(packet(&mut stream).0, 4);
                 let frame = packet(&mut stream);
-                assert_eq!((frame.0, frame.1), (2, 2));
+                assert_eq!(frame.0, 2);
             }
             drop(service);
             println!(
@@ -702,20 +788,29 @@ mod tests {
         assert!(write_packet(&mut bytes, 2, 7, &vec![0; MAX_ACCESS_UNIT + 1]).is_err());
     }
     #[test]
-    fn access_units_survive_split_start_codes_and_keep_parameter_sets() {
-        let first = vec![
-            0, 0, 0, 1, 9, 0xf0, 0, 0, 0, 1, 0x67, 1, 2, 0, 0, 1, 0x65, 7, 8,
-        ];
-        let mut bytes = first.clone();
-        bytes.extend([0, 0, 1, 9, 0xf0, 0, 0, 1, 0x41, 3, 4, 0, 0, 0, 1, 9, 0xf0]);
-        let mut splitter = AccessUnits::default();
-        let mut frames = Vec::new();
-        for byte in bytes {
-            frames.extend(splitter.push(&[byte]).unwrap());
+    fn timestamped_packets_reject_reordering_invalid_sizes_and_encoder_errors() {
+        assert_eq!(
+            parse_packet_metadata("0, 1770000000000000, 1770000000000000, 33333, 2413, 0x0")
+                .unwrap(),
+            (1770000000000000, 2413)
+        );
+        assert_eq!(
+            parse_packet_metadata(
+                "0, 1770000000000000, 1770000000000000, 33333, 2413, 0x0, F=0x0, S=1, 8"
+            )
+            .unwrap(),
+            (1770000000000000, 2413)
+        );
+        for line in [
+            "0, 1, 2, 33333, 10, 0x0",
+            "0, 0, 0, 33333, 10, 0x0",
+            "0, -1, -1, 33333, 10, 0x0",
+            "0, 1, 1, 33333, 0, 0x0",
+            "0, 1, 1, 33333, 8388609, 0x0",
+            "encoder failed",
+        ] {
+            assert!(parse_packet_metadata(line).is_err(), "{line}");
         }
-        assert_eq!(frames.len(), 2);
-        assert_eq!(frames[0], first);
-        assert!(splitter.push(&vec![1; MAX_ACCESS_UNIT + 1]).is_err());
     }
     #[test]
     fn video_size_preserves_landscape_portrait_and_even_dimensions() {

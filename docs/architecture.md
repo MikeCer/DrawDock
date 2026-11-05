@@ -19,7 +19,7 @@ Paths below are relative to the repository root.
 | `apps\dd-host\src\windows_overlay.rs` | Output enumeration, topmost layered window, relocation and presentation |
 | `apps\dd-host\src\raster.rs` | Generated SVG, Windows font lookup, resvg rasterization and BGRA conversion |
 | `apps\dd-host\src\session.rs` | TLS control service, authentication, protocol dispatch, source barriers and commit transactions |
-| `apps\dd-host\src\source.rs` | Selected output geometry and source epoch |
+| `apps\dd-host\src\source.rs` | Selected geometry/epoch and bounded completed-presentation timeline |
 | `apps\dd-host\src\zoom.rs` / `windows_zoom.rs` | Bounded shared viewport geometry and native per-monitor magnifier ownership |
 | `apps\dd-host\src\windows_input.rs` | Pointer generations, mode policy, held-button tracking and Win32 `SendInput` |
 | `apps\dd-host\src\trust.rs` | Persistent TLS identity, DPAPI registry and device revocation |
@@ -62,8 +62,9 @@ preexisting forwarding are never silently adopted or terminated.
    paces every frame and coalesces motion without crossing control barriers.
 3. The host checks authentication, source epoch, readiness, mode and payload
    limits before mutating `Scene` or injecting input.
-4. Scene changes advance a revision. The presenter redraws when needed;
-   transient laser expiry also advances the revision.
+4. Content changes advance a revision. Laser samples/expiry do not invalidate
+   the full scene raster: a separate 16x16 click-through layered window moves
+   one spot, interpolating toward each new sample for at most 1/60 second.
 5. `raster.rs` generates SVG from typed scene data, renders with resvg and
    converts premultiplied RGBA to BGRA for the layered window.
 
@@ -103,11 +104,13 @@ origins are quantized to physical pixels and acknowledged back to Android.
 No global fullscreen magnification, UIAccess or accessibility setting is used.
 
 The TLS worker submits a bounded zoom request to the presenter and waits for
-its acknowledgement before advancing the source epoch/restarting capture.
-New input waits for matching rendered video and `source_ready`. Continuous
+its acknowledgement before advancing the source epoch. Zoom preserves the
+capture process and decoder; new input still waits for matching texture-latched
+video and `source_ready`. Continuous
 gesture targets coalesce on Android while a view transition is pending.
-Session teardown and monitor switching synchronously remove the magnifier;
-the owning window is also destroyed on presenter exit/process termination.
+Reset/session teardown hide magnification but retain the native control warm.
+Monitor switching and presenter exit destroy its monitor-scoped windows. The
+laser source stays below Magnifier, never as a second unzoomed dot above it.
 
 ## Scene, history and session state
 
@@ -139,8 +142,12 @@ configuration and Annex-B access units. Android uses `MediaCodec` and a
 `TextureView`.
 
 The capture mode is `included`: committed annotations come from video rather
-than a second local object renderer. Provisional pen ink ends on pen-up. There
-is no frame-to-scene-revision watermark, so the handoff can briefly show a gap.
+than a second local object renderer. On pen-up, bounded normalized provisional
+ink remains until both its commit acknowledgement and a matching
+texture-latched frame watermark are available. Either can arrive first.
+Previews follow the displayed viewport through zoom; rejection, source change
+and disconnect clean them up. Conservative capture attribution can briefly
+double translucent ink, so this is not an exact no-overlap presentation proof.
 See [video streaming](video-streaming.md).
 
 ## Concurrency and failure boundaries
@@ -154,6 +161,8 @@ Android performs network reads/writes, video decoding, clipboard image decoding
 and TLS close on workers. UI changes are posted to the main thread. Session
 generations and source epochs prevent late callbacks from affecting a replacement
 connection or display.
+Decoder output drains independently of network input, avoiding a wait for the
+next packet before releasing an already-decoded frame.
 
 Do not perform blocking network/process work on the Android UI thread, retain
 held buttons across mode/source changes, silently replace trust on errors or

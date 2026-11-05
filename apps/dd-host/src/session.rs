@@ -371,6 +371,8 @@ fn serve_authenticated(
     let mut transaction: Option<CommitTransaction> = None;
     let mut source_ready = false;
     let mut source_scenes: HashMap<String, Scene> = HashMap::new();
+    let trace_performance = std::env::var("DRAWDOCK_PERF_TRACE").as_deref() == Ok("1");
+    let mut zoom_timing: Option<(u64, Instant)> = None;
     loop {
         let message = match read_json_line(reader) {
             Ok(message) => message,
@@ -433,11 +435,21 @@ fn serve_authenticated(
                     .validate_epoch(&message)?;
             }
             if command == "source_ready" {
+                if let Some((epoch, started)) = zoom_timing.take()
+                    && trace_performance
+                    && message["source_epoch"].as_u64() == Some(epoch)
+                {
+                    println!(
+                        "PERF zoom_ready epoch={epoch} elapsed_ms={:.3}",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
+                }
                 source_ready = true;
                 let canvas = scene.lock().map_err(|_| "scene lock poisoned")?.canvas();
                 return Ok(Some(source_ready_ack(&message, canvas, input.mode())));
             }
             if command == "select_source" {
+                zoom_timing = None;
                 let name = message["source"].as_str().ok_or("source name missing")?;
                 let request_id = message["request_id"]
                     .as_u64()
@@ -464,6 +476,7 @@ fn serve_authenticated(
                     input.force_draw()?;
                 }
                 selected.output = output;
+                selected.reset_presentations();
                 selected.epoch = selected
                     .epoch
                     .checked_add(1)
@@ -474,6 +487,7 @@ fn serve_authenticated(
             }
             require_ready(command, source_ready)?;
             if command == "set_zoom" {
+                let zoom_started = Instant::now();
                 let request_id = message["request_id"]
                     .as_u64()
                     .ok_or("zoom request id missing")?;
@@ -493,6 +507,7 @@ fn serve_authenticated(
                     .epoch
                     .checked_add(1)
                     .ok_or("source epoch exhausted")?;
+                zoom_timing = Some((selected.epoch, zoom_started));
                 source_ready = false;
                 return Ok(Some(json!({
                     "type": "zoom_selected", "request_id": request_id,
@@ -541,7 +556,14 @@ fn require_ready(command: &str, ready: bool) -> Result<(), String> {
 }
 
 fn command_error(message: &Value, error: &str) -> Value {
-    json!({"type":"error","message":error,"request_id":message["request_id"],"source_epoch":message["source_epoch"]})
+    let mut response = json!({"type":"error","message":error,"request_id":message["request_id"],"source_epoch":message["source_epoch"]});
+    if let Some(id) = message["object_id"]
+        .as_u64()
+        .or_else(|| message["object"]["id"].as_u64())
+    {
+        response["object_id"] = json!(id);
+    }
+    response
 }
 
 fn source_ready_ack(message: &Value, canvas: Canvas, mode: Mode) -> Value {
@@ -631,11 +653,13 @@ fn process_command(
                     .ok_or("commit is missing its object")?,
             )
             .map_err(|error| format!("invalid annotation object: {error}"))?;
-            scene
+            let id = object.id;
+            let mut scene = scene
                 .lock()
-                .map_err(|_| "canonical scene lock is poisoned".to_owned())?
-                .commit(object)?;
-            Ok(Some(json!({"type": "ack"})))
+                .map_err(|_| "canonical scene lock is poisoned")?;
+            scene.commit(object)?;
+            Ok(Some(json!({"type": "commit_ack", "object_id": id,
+                "source_epoch": message["source_epoch"], "revision": scene.revision()})))
         }
         "begin_commit" => {
             if transaction.is_some() {
@@ -719,11 +743,12 @@ fn process_command(
             if object.id != object_id {
                 return Err("commit transaction object id did not match".into());
             }
-            scene
+            let mut scene = scene
                 .lock()
-                .map_err(|_| "canonical scene lock is poisoned".to_owned())?
-                .commit(object)?;
-            Ok(Some(json!({"type": "ack"})))
+                .map_err(|_| "canonical scene lock is poisoned")?;
+            scene.commit(object)?;
+            Ok(Some(json!({"type": "commit_ack", "object_id": object_id,
+                "source_epoch": message["source_epoch"], "revision": scene.revision()})))
         }
         "cancel_commit" => {
             *transaction = None;
@@ -926,6 +951,27 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commit_acknowledges_the_object_and_content_revision_but_rejection_never_does() {
+        let scene = Arc::new(Mutex::new(Scene::default()));
+        let mut input = test_input();
+        let mut transaction = None;
+        let object = serde_json::to_value(&Scene::demo().objects()[0]).unwrap();
+        let message = json!({"type": "commit", "source_epoch": 7, "object": object});
+        let ack = process_command(&message, &scene, &mut input, &mut transaction)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ack,
+            json!({"type": "commit_ack", "object_id": 1, "source_epoch": 7, "revision": 1})
+        );
+        let error = process_command(&message, &scene, &mut input, &mut transaction).unwrap_err();
+        let rejected = command_error(&message, &error);
+        assert_eq!(rejected["object_id"], 1);
+        assert_eq!(rejected["type"], "error");
+        assert_eq!(scene.lock().unwrap().revision(), 1);
+    }
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn test_input() -> WindowsInput {
@@ -1051,6 +1097,11 @@ mod tests {
             scene.lock().unwrap().laser().unwrap().rgba,
             [255, 0, 0, 255]
         );
+        assert_eq!(
+            scene.lock().unwrap().revision(),
+            0,
+            "Laser motion must not invalidate scene raster"
+        );
         assert!(!scene.lock().unwrap().undo());
         assert!(
             process_command(
@@ -1063,6 +1114,7 @@ mod tests {
             .is_none()
         );
         assert!(scene.lock().unwrap().laser().is_none());
+        assert_eq!(scene.lock().unwrap().revision(), 0);
         input.set_mode(Mode::Pointer, 1).unwrap();
         assert!(process_command(&active, &scene, &mut input, &mut transaction).is_err());
     }

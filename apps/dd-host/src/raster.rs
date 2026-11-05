@@ -64,6 +64,33 @@ pub fn render(scene: &Scene, width: usize, height: usize, pixels: &mut [u8]) -> 
     Ok(())
 }
 
+pub fn laser_sprite(rgba: [u8; 4]) -> Result<Vec<u8>, String> {
+    let mut pixmap = tiny_skia::Pixmap::new(16, 16).ok_or("allocate laser sprite")?;
+    let circle = tiny_skia::PathBuilder::from_circle(8.0, 8.0, 6.0).ok_or("build laser circle")?;
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(rgba[0], rgba[1], rgba[2], rgba[3]);
+    pixmap.fill_path(
+        &circle,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    paint.set_color_rgba8(255, 255, 255, 255);
+    pixmap.stroke_path(
+        &circle,
+        &paint,
+        &tiny_skia::Stroke::default(),
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    let mut pixels = pixmap.take();
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    Ok(pixels)
+}
+
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -192,6 +219,40 @@ mod tests {
     use super::*;
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use dd_scene::{Canvas, InkStyle, Point, Transform};
+
+    #[test]
+    #[ignore = "Measures 4K raster cost; run explicitly in debug and release profiles"]
+    fn performance_4k_laser_raster_baseline() {
+        let mut scene = Scene::demo();
+        scene
+            .set_canvas(Canvas {
+                blackboard: true,
+                grid: true,
+            })
+            .unwrap();
+        let mut pixels = vec![0; 3840 * 2160 * 4];
+        let mut samples = Vec::new();
+        for index in 0..23 {
+            scene
+                .set_laser(true, Point { x: 0.5, y: 0.5 }, [255, 0, 0, 255])
+                .unwrap();
+            let start = std::time::Instant::now();
+            render(&scene, 3840, 2160, &mut pixels).unwrap();
+            std::hint::black_box(&pixels);
+            if index >= 3 {
+                samples.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+        assert_eq!(pixel(&pixels, 3840, 1920, 1080), [0, 0, 255, 255]);
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "4K grid+ink+laser raster-only, 20 samples: p50={:.2}ms p95={:.2}ms max={:.2}ms; debug_assertions={}",
+            samples[9],
+            samples[18],
+            samples[19],
+            cfg!(debug_assertions)
+        );
+    }
 
     fn object(tool: Tool) -> InkObject {
         InkObject {

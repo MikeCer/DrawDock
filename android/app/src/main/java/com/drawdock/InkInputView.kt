@@ -43,6 +43,18 @@ class InkInputView(context: Context) : View(context) {
     }
     private val marks = mutableListOf<InkMark>()
     private val redoMarks = mutableListOf<InkMark>()
+    private val pendingInk = PendingInk()
+    private var displayedViewport = SharedViewport()
+    var sourceEpoch = 0L
+    var onHandoffTimeout: (() -> Unit)? = null
+    private val handoffTimer = object : Runnable {
+        override fun run() {
+            val oldest = pendingInk.oldestSubmission ?: return
+            if (SystemClock.uptimeMillis() - oldest >= 10_000) {
+                onHandoffTimeout?.invoke()
+            } else postDelayed(this, 500)
+        }
+    }
     private val activePoints = mutableListOf<Pair<Float, Float>>()
     private var activeTool = DrawTool.FREEHAND
     private var activeColor = 0xFFFF0000.toInt()
@@ -51,7 +63,7 @@ class InkInputView(context: Context) : View(context) {
     private var latchedColor = activeColor
     private var latchedWidth = activeWidth
     private var statusMessage = "LOCAL PREVIEW ONLY - not connected to the PC"
-    var onCommit: ((InkMark) -> Unit)? = null
+    var onCommit: ((InkMark) -> Long?)? = null
     var onUndo: (() -> Unit)? = null
     var onRedo: (() -> Unit)? = null
     var onPointerEvent: ((PointerEvent) -> Unit)? = null
@@ -156,7 +168,31 @@ class InkInputView(context: Context) : View(context) {
         cancelActiveContact()
         redoMarks.clear()
         marks.clear()
+        clearPendingInk()
         selection = null
+        invalidate()
+    }
+
+    fun clearPendingInk() {
+        pendingInk.clear()
+        displayedViewport = SharedViewport()
+        removeCallbacks(handoffTimer)
+        invalidate()
+    }
+
+    fun acknowledgeInk(id: Long, epoch: Long, revision: Long) {
+        pendingInk.acknowledge(id, epoch, revision)
+        invalidate()
+    }
+
+    fun rejectInk(id: Long) {
+        pendingInk.reject(id)
+        invalidate()
+    }
+
+    fun frameLatched(frame: VideoFrameState) {
+        pendingInk.frameLatched(frame)
+        frame.viewport?.let { displayedViewport = it }
         invalidate()
     }
 
@@ -465,8 +501,23 @@ class InkInputView(context: Context) : View(context) {
             }
             marks.add(mark)
             redoMarks.clear()
+            onCommit?.invoke(mark)
+        } else {
+            if (!pendingInk.canAdd(mark)) {
+                onMessage?.invoke("Waiting for PC ink; pending preview budget is full. Stroke was not sent.")
+                return
+            }
+            val id = onCommit?.invoke(mark) ?: return
+            val canonical = navigationViewport.mark(mark, width, height)
+            val normalized = canonical.copy(width = canonical.width / minOf(width, height),
+                points = canonical.points.map { it.first / width to it.second / height })
+            val wasEmpty = pendingInk.isEmpty
+            pendingInk.add(id, sourceEpoch, normalized, SystemClock.uptimeMillis())
+            if (wasEmpty) {
+                removeCallbacks(handoffTimer)
+                postDelayed(handoffTimer, 500)
+            }
         }
-        onCommit?.invoke(mark)
         invalidate()
     }
 
@@ -569,6 +620,16 @@ class InkInputView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (!remoteVideoVisible) for (mark in marks) drawMark(canvas, mark)
+        if (remoteVideoVisible) {
+            val view = displayedViewport
+            for (mark in pendingInk.marks) {
+                drawMark(canvas, mark.copy(width = mark.width * minOf(width, height) * view.scale,
+                    points = mark.points.map {
+                        (it.first - view.left) * view.scale * width to
+                            (it.second - view.top) * view.scale * height
+                    }))
+            }
+        }
         if (vertices.isNotEmpty()) {
             val style = vertexStyle
             if (style != null) drawMark(canvas, style.copy(

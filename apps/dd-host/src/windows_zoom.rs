@@ -2,7 +2,7 @@ use crate::{windows_overlay::Output, zoom::Viewport};
 use std::{io, ptr::null_mut};
 use windows_sys::Win32::{
     Foundation::{HWND, RECT},
-    Graphics::Gdi::InvalidateRect,
+    Graphics::Gdi::{InvalidateRect, UpdateWindow},
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::*,
 };
@@ -95,7 +95,7 @@ impl Magnifier {
                     output.top,
                     output.width(),
                     output.height(),
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    SWP_NOACTIVATE | if view.scale > 1.0 { SWP_SHOWWINDOW } else { 0 },
                 ),
                 "show zoom host",
             )?;
@@ -104,6 +104,14 @@ impl Magnifier {
     }
 
     pub fn set_view(&mut self, view: Viewport) -> Result<(), String> {
+        if view.scale == 1.0 {
+            self.view = view;
+            // SAFETY: Keep the native control warm without magnifying the unzoomed desktop.
+            unsafe {
+                ShowWindow(self.host, SW_HIDE);
+            }
+            return Ok(());
+        }
         let matrix = [view.scale, 0.0, 0.0, 0.0, view.scale, 0.0, 0.0, 0.0, 1.0];
         // SAFETY: control belongs to this thread and matrix is valid during the call.
         unsafe {
@@ -113,10 +121,28 @@ impl Magnifier {
             )?
         };
         self.view = view;
-        self.refresh()
+        self.refresh()?;
+        // SAFETY: The control stays above the annotation and laser source windows without activation.
+        unsafe {
+            check(
+                SetWindowPos(
+                    self.host,
+                    HWND_TOPMOST,
+                    self.output.left,
+                    self.output.top,
+                    self.output.width(),
+                    self.output.height(),
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                ),
+                "show zoom host",
+            )
+        }
     }
 
     pub fn refresh(&self) -> Result<(), String> {
+        if self.view.scale == 1.0 {
+            return Ok(());
+        }
         let left = self.output.left + (self.view.left * self.output.width() as f32).round() as i32;
         let top = self.output.top + (self.view.top * self.output.height() as f32).round() as i32;
         let rect = RECT {
@@ -132,7 +158,8 @@ impl Magnifier {
             check(
                 InvalidateRect(self.control, null_mut(), 0),
                 "refresh zoom control",
-            )
+            )?;
+            check(UpdateWindow(self.control), "paint zoom control")
         }
     }
 }

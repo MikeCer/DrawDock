@@ -4,8 +4,11 @@
 
 `apps\dd-host\src\video.rs` owns a native FFmpeg process using Windows `gdigrab`.
 It captures the selected output's physical rectangle, including the mouse and
-annotation overlay. Rust reads H.264 from stdout, splits Annex-B access units
-at AUD boundaries and sends complete units over a dedicated pinned-TLS stream.
+annotation overlay. FFmpeg's tee muxer emits bounded `framecrc` packet metadata
+to stderr **before** the matching Annex-B H.264 bytes to stdout. Rust reads
+exact packet lengths instead of waiting for the next AUD, preserving
+microsecond gdigrab capture timestamps with `-copyts`, passthrough frame pacing
+and a 1/1000000 encoder timebase. No raw 4K frame IPC is added.
 Android's `RemoteVideoDecoder` validates the format and supplies `MediaCodec`
 output to the workspace `TextureView`.
 
@@ -35,8 +38,11 @@ See [video wire framing](protocol.md#video-connection).
 
 Android selects a decoder supporting the negotiated geometry/rate before
 enabling input, checks advertised capabilities and derives timestamps from the
-negotiated frame rate. A source change creates a new configuration/keyframe
-sequence and requires a matching rendered epoch before source readiness.
+negotiated frame rate using a process-wide monotonic PTS allocator; reconnects
+cannot reuse an old texture's timestamp. Decoder output drains
+on its own worker, not only after another network packet. A monitor change
+creates a new configuration/keyframe sequence. Zoom reuses capture, encoder and
+decoder while still requiring matching texture-latched epochs for readiness.
 
 ## Encoders
 
@@ -60,13 +66,37 @@ can reference it. A sustained stall ends video and requires reconnection from
 a fresh keyframe. The client suspends drawing when video is unavailable.
 Source changes restart capture, and session shutdown stops the video service
 and its owned child process.
+Zoom alone does not restart capture. Frames without safe presentation metadata
+are still decoded, but their output buffers are not rendered; dependent encoded
+units are never discarded.
 
 ## Annotation handoff
 
-Capture includes authoritative PC ink. Android draws provisional active ink,
-not a second copy of committed host objects. On lift it removes the provisional
-mark immediately. Without a capture-revision watermark there can be a short
-gap before video displays the committed mark.
+Capture includes authoritative PC ink. Android keeps provisional pen/path/text
+marks after lift until their object-correlated commit acknowledgements and a
+texture-latched scene revision both arrive. Either ordering is supported.
+Pending marks use normalized canonical coordinates and reproject through the
+displayed viewport, so a zoom acknowledgement does not erase them.
+
+The preview queue admits at most 128 marks with an 8 MiB accounting budget
+(including conservative point/string costs). Admission failure is reported
+without sending the mark. Host rejection removes that mark; source changes and
+disconnect clear pending state. A 10-second handoff failure ends the session
+with an explicit error rather than retaining unbounded or apparently committed
+ink. These bounds are separate from the existing outbound command budget.
+
+The Windows presenter publishes a bounded 128-interval timeline only after
+successful layered-window presentation, magnifier painting and `DwmFlush`.
+Frame attribution uses gdigrab's timestamp before `BitBlt`, with a 33.334-ms
+margin around presentation transitions. Unknown/evicted intervals cannot
+acknowledge content. A wall-clock discontinuity exceeding 10 ms relative to
+monotonic time, or a stale/out-of-range capture timestamp, ends video explicitly;
+a new video connection starts a fresh clock/timeline.
+
+This is conservative attribution, not an exact capture-completion fence.
+Capture/compositor and texture-update timing can briefly show both provisional
+and returned translucent ink. Recorded highlighter tests expose that extra
+opacity; do not describe the handoff as pixel-identical or overlap-free.
 
 Any change to capture inclusion/exclusion or presentation acknowledgement must
 update the host configuration, Android rendering policy and readiness/revision
@@ -97,7 +127,13 @@ unpaced encoder throughput, capture/transport delay and actual input-to-photon
 latency. Keep measurements and hardware-specific results in project records
 rather than this implementation guide.
 
+For native laser motion, the presenter caches a small premultiplied sprite,
+moves it without raising it above Magnifier, and clips it at monitor edges.
+The main loop pumps a bounded message batch and targets 60 Hz. Content revisions
+do not change for laser motion, release or expiry.
+
 References:
 
 - [rusty_ffmpeg crate documentation](https://docs.rs/crate/rusty_ffmpeg/latest)
 - [NVIDIA FFmpeg integration](https://docs.nvidia.com/video-technologies/video-codec-sdk/13.0/ffmpeg-with-nvidia-gpu/index.html)
+- [FFmpeg 7.0 gdigrab capture timestamp placement](https://github.com/FFmpeg/FFmpeg/blob/n7.0/libavdevice/gdigrab.c)

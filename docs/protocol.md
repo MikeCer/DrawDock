@@ -65,7 +65,7 @@ monitor's session scene, advances the epoch, relocates the overlay and restarts
 capture. It returns `source_selected` with `request_id`, `selected`, `canvas`
 and `mode`.
 
-After rendering a video frame for the selected epoch, Android sends
+After matching a texture-updated frame for the selected epoch, Android sends
 `{"type":"source_ready","source_epoch":2}`. The host replies with
 `source_ready_ack`, that epoch, `canvas` and `mode`.
 Pointer, editing, scene/history, Clear and mode commands are suspended until
@@ -95,8 +95,8 @@ and is permitted in either Draw or Pointer mode.
 The host releases buttons, clears the transient laser and cancels any commit
 transaction. After Windows has applied the viewport, it advances the epoch and
 returns `zoom_selected` with `request_id` and `selected` metadata, including the
-actual pixel-quantized viewport. Capture restarts under the new epoch. The client
-must wait for a rendered matching video frame and `source_ready_ack` before
+actual pixel-quantized viewport. Capture and decoding remain alive. The client
+must wait for a texture-latched matching video frame and `source_ready_ack` before
 allowing new input or sending its next coalesced zoom target. A rejection or
 timeout is explicit; Android disconnects if a submitted zoom fails.
 
@@ -147,8 +147,12 @@ The host validates PNG signature, complete decoding/end, canonical base64,
 dimensions and allocation bounds, and rejects animated PNG. It does not accept
 arbitrary image paths, remote URLs or user-supplied SVG.
 
-Successful direct commits return `{"type":"ack"}`. This acknowledgement does not
-identify a rendered video frame or establish physical presentation.
+Successful direct commits return
+`{"type":"commit_ack","object_id":42,"source_epoch":1,"revision":7}`.
+The revision describes accepted canonical content, not physical presentation.
+The client assigns the object ID before enqueueing and keeps its provisional
+mark until a texture-latched video watermark reaches that revision in the same
+monitor's epoch sequence. A commit acknowledgement alone never removes preview.
 
 ## Large commits
 
@@ -166,7 +170,8 @@ contiguous, match the object ID and stay within the declared length. Finish
 checks total length, digest, parsed object ID and ordinary scene validation
 before committing atomically. Invalid ordering/bounds discard the transaction.
 Expiry discards it; source changes and session teardown cancel it.
-Each successful transaction command returns `ack`.
+Successful begin/chunk/cancel commands return `ack`; successful finish returns
+the same `commit_ack` as a direct commit.
 
 The host decoded-chunk bound is 48 KiB, but JSON/base64 overhead must still fit
 the frame limit. Android sends **36 KiB raw chunks**, producing 48 KiB of base64
@@ -258,7 +263,9 @@ Active laser requires normalized coordinates; absent color defaults red.
 `active:false` stops it. There is no per-sample acknowledgement or history
 entry. Android refreshes at 100-ms intervals, and the host expires the point
 after 300 ms without refresh. Coalescing must preserve stops and control/source
-barriers.
+barriers. Motion samples also send immediately. Laser motion/expiry do not
+advance the canonical content revision. Windows presents a single interpolated
+spot, without a trail or rerasterizing existing annotations.
 
 ## Errors and ordering
 
@@ -266,6 +273,8 @@ Command rejection returns `error` with `message`, `request_id` and `source_epoch
 copied from the request (unprovided values are null). Semantic command errors
 are reported without claiming mutation succeeded. Framing, rate, lease and
 transport failures end the session.
+Commit/transaction errors additionally carry the supplied `object_id`, allowing
+the matching rejected preview to be removed explicitly.
 
 Android spaces every control frame by at least 12.5 ms, including transaction
 chunks and heartbeats. Pending motion coalesces only across compatible adjacent
@@ -278,7 +287,7 @@ burst credit.
 The second connection verifies the same certificate pin, then sends:
 
 ```json
-{"type":"video","token":"<fresh video_token from paired>"}
+{"type":"video","version":2,"token":"<fresh video_token from paired>"}
 ```
 
 Video authentication has a 30-second window and three-attempt limit. It does not
@@ -292,10 +301,29 @@ authorize control. The authenticated connection switches to binary packets:
 | Payload | Exactly the indicated byte count |
 
 Kind 1 contains configuration JSON (`codec`, `width`, `height`, `fps`, `source`,
-`annotation_capture_mode`, `encoder`, `color_space`); Android bounds it to 64 KiB.
+`annotation_capture_mode`, `encoder`, `color_space`, `frame_metadata: 1`);
+Android bounds it to 64 KiB.
 Kind 2 contains a complete H.264 Annex-B access unit, including startup
 SPS/PPS/IDR. Kind 3 contains a UTF-8 error message; the host uses epoch zero for
 that failure packet. Packet payloads are nonempty and bounded to 8 MiB.
+Kind 4 immediately precedes each kind 2 packet and contains:
+
+```json
+{"frame_id":123,"presentation":{"epoch":3,"revision":7,"zoom":{"scale":1.25,"left":0.1,"top":0.1}}}
+```
+
+`frame_id` strictly increases across the entire video connection, including
+capture restarts. The paired packets have identical header epochs. When capture
+cannot be attributed safely, `presentation` is null and both header epochs are
+zero. Such a frame is decoded to preserve H.264 references, but not displayed,
+used for readiness or used to retire provisional ink.
+
+Kind 1 restarts decoding only for a real output/capture change, not each zoom
+epoch. Kind 2/4 epochs describe their presentation, not necessarily the epoch
+of the most recent kind 1. Android associates watermarks with codec input PTS
+and matches actual `SurfaceTexture` timestamps. PTS allocation remains unique
+across decoder/session replacements to reject late old textures; feeding/releasing a decoder
+buffer is not sufficient acknowledgement. Update the host and APK together.
 See [video streaming](video-streaming.md) for codec and queue configuration.
 
 ## Resource limits

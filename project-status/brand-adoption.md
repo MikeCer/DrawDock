@@ -369,9 +369,70 @@ This is implementation work driven by measurements, not only a test/report phase
   soak tests, including fullscreen and repeated source/zoom changes. Record
   regressions, remaining limits and unavailable hardware honestly.
 
-Agree measurable acceptance targets from the baseline before implementing
-optimizations; do not invent achieved latency/FPS or claim that this newly
-added work is already complete.
+The owner approved these measured targets before implementation: zero missing
+ink frames at handoff, at least 3x lower p95 zoom turnaround, and native laser
+presentation work below 16.7 ms p95 with one moving spot/no trail.
+
+### Milestone 6 performance implementation and evidence
+
+The host now separates content revisions from laser motion/expiry, presents a
+small interpolated laser sprite below Magnifier, and paces the native loop
+toward 60 Hz. Zoom keeps the native magnifier warm and reuses FFmpeg/MediaCodec.
+Timestamped H.264 packet framing removes next-AUD boundary waiting. Bounded
+completed-presentation intervals, object/revision acknowledgements and actual
+texture timestamps coordinate retained provisional ink. Pinning, authentication,
+readiness barriers and existing congestion deadlines are unchanged.
+
+| Check | Windows/API 36 result |
+|---|---|
+| Before zoom | USB/ADB, release host, NVENC, 4K DISPLAY3: six alternating Zoom in/Reset operations; host receipt to Android `source_ready` p50 973.884 ms, nearest-rank p95 1307.748 ms |
+| Final zoom | Two equivalent six-operation runs with the final APK, including same-process reconnect: p95 361.082 / 394.757 ms; combined p50 315.568 ms, nearest-rank p95 394.757 ms, **3.31x lower p95**, one capture process per run |
+| Ink continuity | PASS at three probe locations per clip: three rapid pen strokes and three highlighter strokes; all 285 pen / 294 highlighter recorded frames decoded and frame counts independently checked with ffprobe; zero missing-ink frames after each stroke first appeared |
+| Translucent handoff | PARTIAL: highlighter probes show 1-7 recorded frames of extra opacity during handoff; continuity passes, exact no-overlap compositing does not |
+| Laser | PASS software budget: 116 native sprite-presentation samples, p95 2.413 ms; release hides the spot; interpolation is bounded to 1/60 second in unit tests |
+| Original raster bottleneck | Same 4K demo/Blackboard/Grid/laser fixture: debug p50 3023.61 / p95 3501.13 ms; release p50 68.26 / p95 81.64 ms. This measures raster work, not physical latency or the same stage boundary as sprite presentation |
+| Native video | PASS: authenticated real-monitor capture with x264 and NVENC, wrong-token rejection, persistent capture across epoch-only changes, restart/keyframe on actual output switch |
+| Shared geometry | PASS: zoomed Blackboard/Grid tablet and desktop capture agree at 36/36 samples; two actual monitor switches restart capture, restore per-monitor scene and reset zoom |
+| Short soak | PASS: 357.6 seconds, 120 injected strokes and 24 zoom changes with Blackboard/Grid, one capture process, no reported handoff/readiness stalls |
+| Resources during soak | Host average 5.49% of one CPU core, RSS 149.87 to 154.97 MiB, private bytes 207.41-212.23 MiB, handles 440 to 447; FFmpeg 137.42% of one core, RSS 519.02 to 494.58 MiB, private bytes 804.18-804.29 MiB, handles 579 to 577. These are observations, not proof of no leaks |
+| Automated checks | PASS: 58 Rust tests, 3 normally ignored tests; Clippy `-D warnings`, fmt, debug/release host builds; 43 JVM tests, Android debug APK and lint |
+
+These are software/recording measurements with injected input on the actual
+tablet, **not physical input-to-photon or projector/fullscreen acceptance**.
+The baseline six-sample and final twelve-sample p95 values are maxima of small
+samples, not population estimates. An earlier optimized run reached 339.062 ms;
+an intermediate reconnect-clock variant reached 468.542 ms. These illustrate
+run-to-run variability, not guaranteed latency. The final APK uses process-wide
+unique relative PTS to reject late old textures without a wall-clock dependency.
+The final readiness measurement is stricter than the original:
+actual texture timestamps replace the codec's frame-rendered notification.
+
+Session-local evidence includes `performance-before.json`,
+`performance-final-persistent-clock.json`,
+`performance-final-persistent-clock-repeat.json`, `performance-handoff.json`, the pen/highlighter
+MP4s, `performance-soak.json` and corresponding host logs. Test hosts/FFmpeg and
+owned ADB mappings were stopped/removed. The owner-approved temporary USB
+stay-awake setting was restored from 2 to its original 0 and verified.
+Both host profiles are rebuilt and the matching final APK is installed.
+
+Repeat the non-device checks from repository-root PowerShell:
+
+```powershell
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo build --release -p dd-host
+cargo test --release -p dd-host --bin dd-host native_tls_video_authenticates_and_switches_monitors -- --ignored --nocapture
+cargo test --release -p dd-host --bin dd-host performance_4k_laser_raster_baseline -- --ignored --nocapture
+```
+
+For manual repeat measurements, launch an optimized host with process-local
+`$env:DRAWDOCK_PERF_TRACE = '1'`. The launcher log reports `PERF zoom_ready`
+(host request receipt to tablet readiness), `capture_started` and per-contact
+laser sample/p95 work. Alternate Zoom in/Reset on the same output/encoder;
+record tablet frames to inspect rapid pen and highlighter handoff. Remove
+the environment variable after the measurement. Android's existing
+`testDebugUnitTest assembleDebug lintDebug` commands remain the validation path.
 
 ### Remaining acceptance and limitations
 
@@ -379,14 +440,16 @@ The device tests use injected stylus/touch input on the actual tablet and
 captured Windows output. They do **not** substitute for the owner's physical pen,
 natural multi-touch, direct monitor/projector observation or fullscreen
 presentation acceptance. Live laser-hover ergonomics, mixed pen/palm sequences,
-latency/soak, capture-revision handoff, rotation during a gesture, TalkBack and
-small-window scrolling remain unverified. Zoom was tested over private LAN;
-USB's unchanged TLS transport was not rerun for this milestone.
+long-duration latency/soak, rotation during a gesture, TalkBack and small-window
+scrolling remain unverified. This performance pass reran USB; the new pipeline's
+private-LAN performance still needs a deliberate endpoint switch/re-pair rather
+than silently replacing the owner's saved USB enrollment. GPU utilization and
+network-throughput profiling remain outstanding.
 
 The physical PC mouse is intentionally not intercepted/remapped while zoomed;
 use tablet Pointer mode or Reset to 100% before clicking controls with that
-mouse. Gesture updates can have visible capture/decoder turnaround rather than
-continuous local-only animation. Secure desktop, protected content and exclusive
+mouse. Gesture updates still have measured shared-presentation turnaround
+rather than continuous local-only animation. Secure desktop, protected content and exclusive
 fullscreen behavior retain existing Windows overlay/capture limitations.
 
 API 30 runtime acceptance is BLOCKED by the absence of an API 30 device/image;
@@ -402,6 +465,6 @@ commit; do not mark the mandatory physical Windows annotation acceptance PASS.
 | 3 | Header/settings and dialogs; preserve canvas rendering | Committed by owner as `84bbbd2`; owner approved milestone 4 |
 | 4 | Adaptive launcher and API-compatible system splash | Owner committed `aa523cb`; post-crash rebuild/device checks pass on API 36; API 30 runtime unverified |
 | 5 | Native Windows host launcher/window plus tray icon; independent simultaneous USB/private-LAN listeners and live logs | Implemented; automated/native/device checks PASS; tray/UX owner review and optional commit pending |
-| 6 | Shared desktop/annotation zoom, performance optimization, latency/soak and final UX/accessibility acceptance | Zoom owner-committed as `6039b56`; PARTIAL: performance work and owner physical/fullscreen/accessibility acceptance outstanding |
+| 6 | Shared desktop/annotation zoom, performance optimization, latency/soak and final UX/accessibility acceptance | Zoom owner-committed as `6039b56`; software performance targets pass in recorded USB checks; overall PARTIAL: translucent overlap, LAN/GPU/network profiling, longer soak and owner physical/fullscreen/accessibility acceptance outstanding |
 
 Do not roll these milestones into one change or create commits automatically.

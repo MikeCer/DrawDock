@@ -22,6 +22,24 @@ The same build produces the console host and a native Rust/Win32 launcher:
 & .\target\debug\drawdock-launcher.exe
 ```
 
+For normal drawing and performance checks, use optimized siblings instead:
+
+```powershell
+cargo build --release -p dd-host
+& .\target\release\drawdock-launcher.exe
+```
+
+Debug 4K scene rasterization is substantially slower. Do not mix debug/release
+numbers when comparing performance. The PowerShell helper below still targets
+the debug build. Rebuild/restart the host and install the matching APK together
+after video-protocol changes.
+
+For optional software timing logs, set `$env:DRAWDOCK_PERF_TRACE = '1'` before
+launching. The log shows zoom request-to-readiness and native laser presentation
+work, not physical input-to-photon latency. Quit the launcher through its Quit
+action, then run `Remove-Item Env:DRAWDOCK_PERF_TRACE` to disable tracing for
+future launches.
+
 The launcher has a fixed-size, non-resizable taskbar window and a
 notification-area (tray) icon.
 All listeners start **off**. Select the output, port, encoder and authorized USB

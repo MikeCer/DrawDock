@@ -132,7 +132,9 @@ class MainActivity : ComponentActivity() {
                 }
             }
             override fun onSurfaceTextureSizeChanged(texture: SurfaceTexture, width: Int, height: Int) = Unit
-            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) = Unit
+            override fun onSurfaceTextureUpdated(texture: SurfaceTexture) {
+                sessionClient?.videoTextureUpdated(texture.timestamp)
+            }
             override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
                 disconnectSession()
                 videoSurface?.release()
@@ -201,9 +203,15 @@ class MainActivity : ComponentActivity() {
             val client = sessionClient
             if (client == null) {
                 statusText.text = "LOCAL PREVIEW ONLY - no host session"
-            } else if (!client.sendMark(mark, inputView.width, inputView.height)) {
-                statusText.text = "Stroke was not sent; see connection status"
+                null
+            } else {
+                client.sendMark(mark, inputView.width, inputView.height).also {
+                    if (it == null) statusText.text = "Stroke was not sent; see connection status"
+                }
             }
+        }
+        inputView.onHandoffTimeout = {
+            failVideo("PC ink did not reach the displayed video within 10 seconds; reconnect required.")
         }
         inputView.onUndo = { sessionClient?.undo() }
         inputView.onRedo = { sessionClient?.redo() }
@@ -496,6 +504,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyEditorEvent(response: JSONObject) {
+        if (response.optString("type") == "commit_ack") {
+            inputView.acknowledgeInk(response.getLong("object_id"), response.getLong("source_epoch"),
+                response.getLong("revision"))
+            return
+        }
+        if (response.optString("type") == "error" && !response.isNull("object_id")) {
+            inputView.rejectInk(response.getLong("object_id"))
+        }
         if (response.optLong("source_epoch", -1) != sourceEpoch) return
         val request = response.optLong("request_id", -1)
         if (response.optString("type") == "error") {
@@ -605,7 +621,7 @@ class MainActivity : ComponentActivity() {
                         val top = (inputView.height - h) / 2
                         val mark = InkMark(DrawTool.IMAGE, Color.WHITE, 0.005f * minOf(inputView.width, inputView.height),
                             listOf(left to top, left + w to top + h), imageData = image.base64)
-                        if (sessionClient?.sendMark(mark, inputView.width, inputView.height) == true) {
+                        if (sessionClient?.sendMark(mark, inputView.width, inputView.height) != null) {
                             inputView.selection = null
                             pickTool(DrawTool.SELECT_MOVE)
                             notifyDrawing("Image queued (${image.width}x${image.height}); tap it once visible, then drag to position it.")
@@ -662,6 +678,7 @@ class MainActivity : ComponentActivity() {
         inputView.navigationViewport = viewport
         if (!zoomOnly) queuedZoom = null
         sourceEpoch = selected.getLong("source_epoch")
+        inputView.sourceEpoch = sourceEpoch
         sourceName = selected.getJSONObject("source").getString("name")
         readyEpoch = null
         pendingReadyEpoch = null
@@ -671,7 +688,10 @@ class MainActivity : ComponentActivity() {
             grid = false
         }
         radialMenu.dismiss()
-        inputView.clear()
+        if (zoomOnly) {
+            inputView.cancelActiveContact()
+            inputView.selection = null
+        } else inputView.clear()
         inputView.setInputReady(false)
         screenSelector.setSelection(sources.indexOfFirst { it.first == sourceName }.coerceAtLeast(0))
         screenSelector.isEnabled = false
@@ -971,6 +991,7 @@ class MainActivity : ComponentActivity() {
                         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                     if (!connected && !message.startsWith("Connecting")) {
+                        inputView.clearPendingInk()
                         sessionClient = null
                         connectionButtonSafeText("Connect")
                         toolsMenu.visibility = View.VISIBLE
@@ -1005,6 +1026,8 @@ class MainActivity : ComponentActivity() {
                     } catch (error: org.json.JSONException) {
                         disconnectSession()
                         notifyDrawing("Invalid PC drawing response; reconnect required.")
+                    } catch (error: IllegalArgumentException) {
+                        failVideo("Invalid PC ink acknowledgement; reconnect required.")
                     }
                 }
             },
@@ -1051,8 +1074,10 @@ class MainActivity : ComponentActivity() {
                     fitWorkspace()
                 }
             },
-            onVideoRendered = { epoch ->
+            onVideoRendered = { frame ->
+                val epoch = frame.epoch
                 if (generation == sessionGeneration && epoch == sourceEpoch) {
+                    inputView.frameLatched(frame)
                     videoTexture.alpha = 1f
                     if (pendingSourceRequestId == null && readyEpoch != epoch && pendingReadyEpoch != epoch) {
                         if (sessionClient?.sourceReady(epoch) == true) {
@@ -1161,6 +1186,7 @@ class MainActivity : ComponentActivity() {
         if (::videoTexture.isInitialized) videoTexture.alpha = 0f
         if (::screenSelector.isInitialized) screenSelector.isEnabled = false
         inputView.remoteVideoVisible = false
+        inputView.clearPendingInk()
         pendingModeRequestId = null
         pendingClearRequestId = null
         connectionButtonSafeText("Connect")

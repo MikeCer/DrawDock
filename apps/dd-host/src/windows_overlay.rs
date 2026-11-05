@@ -12,8 +12,13 @@ use std::{
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    fn DwmFlush() -> i32;
+}
 
 type Bool = i32;
 type Handle = *mut c_void;
@@ -148,7 +153,7 @@ struct Msg {
     private: u32,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Output {
     pub name: String,
     pub left: i32,
@@ -308,6 +313,7 @@ unsafe fn show_layered_window(
         .lock()
         .map_err(|_| "canonical scene lock is poisoned".to_owned())?
         .render_snapshot();
+    current_scene.clear_laser();
     render(&current_scene, width as usize, height as usize, pixels)?;
     // SAFETY: GetModuleHandleW(null) retrieves this process module handle.
     let instance = unsafe { GetModuleHandleW(null()) };
@@ -500,9 +506,18 @@ unsafe fn show_layered_window(
         return Err(last_error("SetConsoleCtrlHandler"));
     }
     println!("Overlay visible.");
+    let mut laser_window = LaserWindow::create(instance)?;
     let mut switched = false;
-    let mut magnifier: Option<crate::windows_zoom::Magnifier> = None;
-    loop {
+    let mut magnifier = if selected_source.is_some() {
+        Some(crate::windows_zoom::Magnifier::create(
+            output,
+            crate::zoom::Viewport::default(),
+        )?)
+    } else {
+        None
+    };
+    'presenter: loop {
+        let frame_started = Instant::now();
         if STOP_REQUESTED.load(Ordering::Acquire) {
             break;
         }
@@ -513,18 +528,14 @@ unsafe fn show_layered_window(
                 break;
             }
             if let Some(request) = selected.pending_zoom.take() {
+                selected.begin_presentation_change()?;
                 let view = request.view.for_pixels(width, height);
-                let result = if view.scale == 1.0 {
-                    magnifier = None;
-                    Ok(view)
-                } else {
-                    match &mut magnifier {
-                        Some(mag) => mag.set_view(view).map(|()| view),
-                        None => crate::windows_zoom::Magnifier::create(output, view).map(|mag| {
-                            magnifier = Some(mag);
-                            view
-                        }),
-                    }
+                let result = match &mut magnifier {
+                    Some(mag) => mag.set_view(view).map(|()| view),
+                    None => crate::windows_zoom::Magnifier::create(output, view).map(|mag| {
+                        magnifier = Some(mag);
+                        view
+                    }),
                 };
                 if let Ok(view) = result.as_ref() {
                     selected.zoom = *view;
@@ -541,24 +552,30 @@ unsafe fn show_layered_window(
             }
         }
         // SAFETY: message is a writable MSG and null hwnd receives all thread messages.
-        if unsafe { PeekMessageW(&mut message, null_mut(), 0, 0, 1) } != 0 {
-            if message.message == WM_QUIT {
+        for _ in 0..64 {
+            if unsafe { PeekMessageW(&mut message, null_mut(), 0, 0, 1) } == 0 {
                 break;
+            }
+            if message.message == WM_QUIT {
+                break 'presenter;
             }
             unsafe {
                 TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
-        } else {
-            thread::sleep(Duration::from_millis(16));
         }
 
-        let updated_scene = {
+        let (updated_scene, laser) = {
             let mut scene = scene
                 .lock()
                 .map_err(|_| "canonical scene lock is poisoned")?;
             scene.tick();
-            (scene.revision() != current_scene.revision()).then(|| scene.render_snapshot())
+            let snapshot = (scene.revision() != current_scene.revision()).then(|| {
+                let mut snapshot = scene.render_snapshot();
+                snapshot.clear_laser();
+                snapshot
+            });
+            (snapshot, scene.laser().cloned())
         };
         if let Some(updated_scene) = updated_scene {
             current_scene = updated_scene;
@@ -578,6 +595,12 @@ unsafe fn show_layered_window(
                     bitmap_bits.cast::<u8>(),
                     pixels.len(),
                 );
+            }
+            if let Some(source) = selected_source {
+                source
+                    .lock()
+                    .map_err(|_| "source lock poisoned")?
+                    .begin_presentation_change()?;
             }
             // SAFETY: The DIB and per-call stack data remain valid for this presentation.
             if unsafe {
@@ -604,9 +627,21 @@ unsafe fn show_layered_window(
                 return Err(last_error("UpdateLayeredWindow(scene update)"));
             }
         }
+        laser_window.update(laser.as_ref(), output)?;
         if let Some(mag) = &magnifier {
             mag.refresh()?;
         }
+        if let Some(source) = selected_source {
+            let mut selected = source.lock().map_err(|_| "source lock poisoned")?;
+            if selected.output == *output && selected.needs_presentation(current_scene.revision()) {
+                // A watermark is published only after the actual composition barrier.
+                if unsafe { DwmFlush() } < 0 {
+                    return Err("DwmFlush failed; cannot attest the captured scene".into());
+                }
+                selected.record_presentation(current_scene.revision())?;
+            }
+        }
+        thread::sleep(Duration::from_micros(16_667).saturating_sub(frame_started.elapsed()));
     }
     drop(magnifier);
     THREAD_ID.store(0, Ordering::Relaxed);
@@ -620,6 +655,240 @@ unsafe fn show_layered_window(
     Ok(switched)
 }
 
+struct LaserMotion {
+    from: dd_scene::Point,
+    to: dd_scene::Point,
+    started: Instant,
+}
+
+impl LaserMotion {
+    fn at(&self, now: Instant) -> dd_scene::Point {
+        let t = (now.saturating_duration_since(self.started).as_secs_f32() * 60.0).min(1.0);
+        dd_scene::Point {
+            x: self.from.x + (self.to.x - self.from.x) * t,
+            y: self.from.y + (self.to.y - self.from.y) * t,
+        }
+    }
+}
+
+struct LaserWindow {
+    hwnd: Hwnd,
+    dc: Hdc,
+    bitmap: Hbitmap,
+    old_bitmap: Hgdiobj,
+    bits: *mut u8,
+    style: Option<([u8; 4], [i32; 4])>,
+    position: Option<(i32, i32)>,
+    motion: Option<LaserMotion>,
+    timings: Vec<f64>,
+    trace: bool,
+}
+
+impl LaserWindow {
+    fn create(instance: Hinstance) -> Result<Self, String> {
+        // SAFETY: Uses the already registered click-through overlay class on its owner thread.
+        unsafe {
+            let title: Vec<u16> = "DrawDock Laser\0".encode_utf16().collect();
+            let mut sprite = Self {
+                hwnd: CreateWindowExW(
+                    WS_EX_LAYERED
+                        | WS_EX_TRANSPARENT
+                        | WS_EX_NOACTIVATE
+                        | WS_EX_TOOLWINDOW
+                        | WS_EX_TOPMOST,
+                    CLASS_NAME.as_ptr(),
+                    title.as_ptr(),
+                    WS_POPUP,
+                    0,
+                    0,
+                    16,
+                    16,
+                    null_mut(),
+                    null_mut(),
+                    instance,
+                    null_mut(),
+                ),
+                dc: null_mut(),
+                bitmap: null_mut(),
+                old_bitmap: null_mut(),
+                bits: null_mut(),
+                style: None,
+                position: None,
+                motion: None,
+                timings: Vec::new(),
+                trace: std::env::var("DRAWDOCK_PERF_TRACE").as_deref() == Ok("1"),
+            };
+            if sprite.hwnd.is_null() {
+                return Err(last_error("create laser window"));
+            }
+            sprite.dc = CreateCompatibleDC(null_mut());
+            if sprite.dc.is_null() {
+                return Err(last_error("create laser DC"));
+            }
+            let mut info: BitmapInfo = zeroed();
+            info.header.size = size_of::<BitmapInfoHeader>() as u32;
+            info.header.width = 16;
+            info.header.height = -16;
+            info.header.planes = 1;
+            info.header.bit_count = 32;
+            let mut bits = null_mut();
+            sprite.bitmap = CreateDIBSection(
+                sprite.dc,
+                &mut info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                null_mut(),
+                0,
+            );
+            sprite.bits = bits.cast();
+            if sprite.bitmap.is_null() || sprite.bits.is_null() {
+                return Err(last_error("create laser DIB"));
+            }
+            sprite.old_bitmap = SelectObject(sprite.dc, sprite.bitmap);
+            if sprite.old_bitmap.is_null() {
+                return Err(last_error("select laser DIB"));
+            }
+            Ok(sprite)
+        }
+    }
+
+    fn update(&mut self, laser: Option<&dd_scene::Laser>, output: &Output) -> Result<(), String> {
+        let started = Instant::now();
+        let Some(laser) = laser else {
+            if self.position.take().is_some() {
+                // SAFETY: Hides only our transient, nonactivating window.
+                unsafe {
+                    ShowWindow(self.hwnd, 0);
+                }
+                self.report_timings();
+            }
+            self.motion = None;
+            return Ok(());
+        };
+        if self
+            .motion
+            .as_ref()
+            .is_none_or(|motion| motion.to != laser.point)
+        {
+            let from = self
+                .motion
+                .as_ref()
+                .map_or(laser.point, |motion| motion.at(started));
+            self.motion = Some(LaserMotion {
+                from,
+                to: laser.point,
+                started,
+            });
+        }
+        let point = self
+            .motion
+            .as_ref()
+            .ok_or("laser motion missing")?
+            .at(started);
+        let x = (point.x * output.width() as f32).round() as i32 - 8;
+        let y = (point.y * output.height() as f32).round() as i32 - 8;
+        let clip = [
+            (-x).max(0),
+            (-y).max(0),
+            (output.width() - x).min(16),
+            (output.height() - y).min(16),
+        ];
+        let style = (laser.rgba, clip);
+        let destination = Point {
+            x: output.left + x,
+            y: output.top + y,
+        };
+        // SAFETY: The 16x16 DIB remains selected and alive; moves never raise the laser above Magnifier.
+        unsafe {
+            if self.style != Some(style) {
+                let mut pixels = raster::laser_sprite(laser.rgba)?;
+                for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let (px, py) = ((index % 16) as i32, (index / 16) as i32);
+                    if px < clip[0] || py < clip[1] || px >= clip[2] || py >= clip[3] {
+                        pixel.fill(0);
+                    }
+                }
+                std::ptr::copy_nonoverlapping(pixels.as_ptr(), self.bits, pixels.len());
+                let blend = BlendFunction {
+                    op: AC_SRC_OVER,
+                    flags: 0,
+                    source_constant_alpha: 255,
+                    alpha_format: AC_SRC_ALPHA,
+                };
+                if UpdateLayeredWindow(
+                    self.hwnd,
+                    null_mut(),
+                    &destination,
+                    &Size { cx: 16, cy: 16 },
+                    self.dc,
+                    &Point { x: 0, y: 0 },
+                    0,
+                    &blend,
+                    ULW_ALPHA,
+                ) == 0
+                {
+                    return Err(last_error("present laser sprite"));
+                }
+                self.style = Some(style);
+            } else if self.position == Some((x, y)) {
+                return Ok(());
+            }
+            if SetWindowPos(
+                self.hwnd,
+                null_mut(),
+                destination.x,
+                destination.y,
+                16,
+                16,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW | 0x0004,
+            ) == 0
+            {
+                return Err(last_error("move laser sprite"));
+            }
+        }
+        self.position = Some((x, y));
+        if self.trace && self.timings.len() < 4096 {
+            self.timings.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        Ok(())
+    }
+
+    fn report_timings(&mut self) {
+        if self.timings.is_empty() {
+            return;
+        }
+        self.timings.sort_by(f64::total_cmp);
+        let index = (self.timings.len() * 95).div_ceil(100).saturating_sub(1);
+        println!(
+            "PERF laser samples={} p95_ms={:.3}",
+            self.timings.len(),
+            self.timings[index]
+        );
+        self.timings.clear();
+    }
+}
+
+impl Drop for LaserWindow {
+    fn drop(&mut self) {
+        self.report_timings();
+        // SAFETY: All resources belong to this presenter thread; restore the selected bitmap first.
+        unsafe {
+            if !self.old_bitmap.is_null() {
+                SelectObject(self.dc, self.old_bitmap);
+            }
+            if !self.bitmap.is_null() {
+                DeleteObject(self.bitmap);
+            }
+            if !self.dc.is_null() {
+                DeleteDC(self.dc);
+            }
+            if !self.hwnd.is_null() {
+                DestroyWindow(self.hwnd);
+            }
+        }
+    }
+}
+
 fn last_error(operation: &str) -> String {
     let error = io::Error::last_os_error();
     format!("{operation} failed: {error}")
@@ -629,6 +898,24 @@ fn last_error(operation: &str) -> String {
 mod tests {
     use super::*;
     use dd_scene::{InkObject, InkStyle, Point as ScenePoint, Tool, Transform};
+
+    #[test]
+    fn laser_interpolation_is_bounded_to_one_frame_without_extrapolation() {
+        let started = Instant::now();
+        let motion = LaserMotion {
+            from: ScenePoint { x: 0.1, y: 0.2 },
+            to: ScenePoint { x: 0.9, y: 0.6 },
+            started,
+        };
+        assert_eq!(motion.at(started), motion.from);
+        let halfway = motion.at(started + Duration::from_secs_f32(1.0 / 120.0));
+        assert!((halfway.x - 0.5).abs() < 0.0001);
+        assert!((halfway.y - 0.4).abs() < 0.0001);
+        assert_eq!(motion.at(started + Duration::from_secs(1)), motion.to);
+        let sprite = raster::laser_sprite([255, 0, 0, 128]).unwrap();
+        assert_eq!(&sprite[(8 * 16 + 8) * 4..][..4], &[0, 0, 128, 128]);
+        assert_eq!(&sprite[..4], &[0, 0, 0, 0]);
+    }
 
     #[test]
     fn rasterizes_scene_into_premultiplied_bgra_pixels() {

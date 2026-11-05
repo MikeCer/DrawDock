@@ -38,7 +38,7 @@ class SessionClient(
     private val onSourceSelected: (JSONObject, Long) -> Unit,
     private val onSourceReady: (Long) -> Unit,
     private val onVideoGeometry: (Long, Int, Int) -> Unit,
-    private val onVideoRendered: (Long) -> Unit,
+    private val onVideoRendered: (VideoFrameState) -> Unit,
     private val onVideoError: (String) -> Unit,
     private val rememberedDeviceId: String?,
     private val onRemembered: (String, String) -> Unit,
@@ -63,6 +63,11 @@ class SessionClient(
     private var activePointerGeneration: Long? = null
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var output: BufferedOutputStream? = null
+    @Volatile private var videoDecoder: RemoteVideoDecoder? = null
+
+    fun videoTextureUpdated(timestampNs: Long) {
+        videoDecoder?.frameLatched(timestampNs)?.let(onVideoRendered)
+    }
 
     fun connect() {
         postStatus("Connecting with pinned TLS…", false)
@@ -135,12 +140,13 @@ class SessionClient(
                         video.soTimeout = 5_000
                         video.startHandshake()
                         val videoOut = BufferedOutputStream(video.outputStream)
-                        writeFrame(videoOut, JSONObject().put("type", "video").put("token", videoToken))
-                        RemoteVideoDecoder(
+                        writeFrame(videoOut, JSONObject().put("type", "video").put("version", 2).put("token", videoToken))
+                        val decoder = RemoteVideoDecoder(
                             videoSurface,
                             { epoch, width, height -> mainHandler.post { onVideoGeometry(epoch, width, height) } },
-                            onVideoRendered,
-                        ).run(BufferedInputStream(video.inputStream))
+                        )
+                        videoDecoder = decoder
+                        decoder.run(BufferedInputStream(video.inputStream))
                     } catch (error: Exception) {
                         if (!closed.get()) mainHandler.post {
                             onVideoError(error.message ?: "Video connection ended")
@@ -158,25 +164,26 @@ class SessionClient(
         }
     }
 
-    fun sendMark(mark: InkMark, viewportWidth: Int, viewportHeight: Int): Boolean {
-        if (viewportWidth <= 0 || viewportHeight <= 0 || mark.points.isEmpty()) return false
+    fun sendMark(mark: InkMark, viewportWidth: Int, viewportHeight: Int): Long? {
+        if (viewportWidth <= 0 || viewportHeight <= 0 || mark.points.isEmpty()) return null
         val reserved = mark.points.size.toLong() * 8L + 256L +
             (mark.imageData?.length ?: 0) + (mark.text?.toByteArray(Charsets.UTF_8)?.size ?: 0)
         while (true) {
             val current = queuedBytes.get()
             if (current + reserved > MAX_PENDING_BYTES) {
                 postStatus("Pending stroke budget is full; stroke was not sent", socket != null)
-                return false
+                return null
             }
             if (queuedBytes.compareAndSet(current, current + reserved)) break
         }
+        val id = nextObjectId.incrementAndGet()
         val command = SessionCommand.Commit(viewport.mark(mark, viewportWidth, viewportHeight),
-            viewportWidth, viewportHeight, reserved, sourceEpoch)
+            viewportWidth, viewportHeight, reserved, sourceEpoch, id)
         if (!enqueue(command)) {
             queuedBytes.addAndGet(-reserved)
-            return false
+            return null
         }
-        return true
+        return id
     }
 
     fun undo() = enqueue(SessionCommand.Control("undo", sourceEpoch))
@@ -324,8 +331,8 @@ class SessionClient(
                         mainHandler.post { onEditorEvent(response) }
                         postStatus("Host rejected command: ${response.optString("message")}", true)
                     }
-                    "editor_ack", "ack" -> {
-                        if (response.has("canvas") || response.optString("type") == "editor_ack") {
+                    "editor_ack", "ack", "commit_ack" -> {
+                        if (response.has("canvas") || response.optString("type") in listOf("editor_ack", "commit_ack")) {
                             mainHandler.post { onEditorEvent(response) }
                         }
                     }
@@ -374,6 +381,7 @@ class SessionClient(
         val connections = listOfNotNull(socket, videoSocket)
         socket = null
         videoSocket = null
+        videoDecoder = null
         output = null
         commands.clear()
         queuedBytes.set(0)
@@ -437,7 +445,7 @@ class SessionClient(
     }
 
     private fun encodeCommit(command: SessionCommand.Commit): List<JSONObject> {
-        val id = nextObjectId.incrementAndGet()
+        val id = command.objectId
         val points = JSONArray()
         command.mark.commitPoints().forEach { (x, y) ->
             points.put(

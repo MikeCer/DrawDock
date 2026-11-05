@@ -52,6 +52,7 @@ internal sealed interface SessionCommand {
         val viewportHeight: Int,
         val reservedBytes: Long,
         override val sourceEpoch: Long = 0,
+        val objectId: Long = 0,
     ) : SessionCommand
 
     data class Control(val type: String, override val sourceEpoch: Long = 0) : SessionCommand

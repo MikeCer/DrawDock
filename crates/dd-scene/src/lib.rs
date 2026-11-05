@@ -161,13 +161,10 @@ impl Scene {
             rgba,
             expires: Instant::now() + Duration::from_millis(300),
         });
-        self.changed();
         Ok(())
     }
     pub fn clear_laser(&mut self) {
-        if self.laser.take().is_some() {
-            self.changed();
-        }
+        self.laser = None;
     }
     pub fn tick(&mut self) {
         if self
@@ -1099,7 +1096,7 @@ mod tests {
         scene.laser.as_mut().unwrap().expires = Instant::now() - Duration::from_millis(1);
         scene.tick();
         assert!(scene.laser().is_none());
-        assert!(scene.revision() > revision);
+        assert_eq!(scene.revision(), revision);
         assert!(!scene.undo());
     }
 
