@@ -3,7 +3,7 @@
 Historical validation record. Contributor documentation starts at
 [docs](../docs/README.md).
 
-Status reflects implementation and evidence available on 2026-11-04.
+Status reflects implementation and evidence available on 2026-11-05.
 
 | Windows requirement | Status | Evidence / gap |
 |---|---|---|
@@ -26,11 +26,11 @@ Status reflects implementation and evidence available on 2026-11-04.
 | W3 tablet screen selector / overlay menu | PARTIAL | Top monitor dropdown, Settings overlay and maximal aspect-fit workspace retained. Pen-only long-press opens hierarchical circular tools. Synthetic stylus tablet checks passed finger exclusion, motion cancellation, action reachability, button sizing and corner clamping; real-pen UX/screen-switch alignment remain manual. |
 | Expanded tools, editing and tablet clipboard paste | PARTIAL | End-to-end protocol/host rendering and Android menu/input implemented for all requested categories. Clear resets backgrounds too. Paste uses explicit tablet clipboard image URI import with bounded lossless PNG; actual provider compatibility and physical image/text/transform/laser visuals remain unverified. |
 | W3 annotation/video reconciliation | BLOCKED | INCLUDED capture avoids independently drawing committed objects on Android; provisional ink hands off on lift. Conservative capture revision watermark is missing, so a short ink gap and physical capture-contract validation remain open. |
-| W4 private-interface Wi-Fi | BLOCKED | Private-address filtering exists, but no Wi-Fi listener/session was started or validated; no firewall rule was changed. |
+| W4 private-interface Wi-Fi | PASS | No-ADB WiFi launcher bound 192.168.1.16 on a Private LAN. Logs confirm tablet 192.168.1.32 QR enrollment/resume. Owner confirmed video, real pen/shape ink on PC, Pointer, Clear and reconnect with USB unplugged. Final APK passed nine automated LAN display switches and owner unplugged-USB retest. No firewall changes. Initial handoff timeout and remaining soak/latency gaps are recorded in feasibility-report.md. |
 | Latency, soak, memory and dropped-frame metrics | BLOCKED | No end-to-end pen/video path; no performance measurements exist. |
 | Linux adapters / GNOME | DEFERRED | Explicitly out of this Windows-first implementation. |
 | QUIC / UDP | DEFERRED | Explicitly deferred until core Windows gates are demonstrated. |
 
 The overall Windows-only result is **PARTIAL**. Mandatory host-visible pen ink,
-live-app/fullscreen behavior and Wi-Fi remain unverified or blocked. Linux and
+formal live-app/fullscreen behavior and long-run metrics remain unverified or blocked. Linux and
 QUIC are **DEFERRED**, not passed.

@@ -76,6 +76,7 @@ class SessionClient(
                     return@thread
                 }
                 connection.connect(InetSocketAddress(host, port), 5_000)
+                connection.tcpNoDelay = true
                 connection.soTimeout = 10_000
                 connection.startHandshake()
 
@@ -126,6 +127,7 @@ class SessionClient(
                         videoSocket = video
                         if (closed.get()) { video.close(); return@thread }
                         video.connect(InetSocketAddress(host, port), 5_000)
+                        video.tcpNoDelay = true
                         video.soTimeout = 5_000
                         video.startHandshake()
                         val videoOut = BufferedOutputStream(video.outputStream)

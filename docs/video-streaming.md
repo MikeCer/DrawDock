@@ -74,6 +74,14 @@ contract together; changing one renderer alone can create doubled or missing ink
 
 ## Process boundary and performance work
 
+Both Android sockets enable TCP_NODELAY, matching the host sockets. The tablet
+disables monitor changes until the current source renders and acknowledges
+readiness. Readiness has a 10-second deadline; a video failure ends the control
+session and exposes reconnect controls rather than leaving a Loading screen.
+The existing 100 ms encoded-frame handoff and 500 ms socket-write bounds still
+fail explicitly on congestion; no automatic video recovery or adaptive bitrate
+is implemented.
+
 The subprocess carries already-compressed H.264, not raw desktop frames.
 FFmpeg capture/scaling uses CPU memory before hardware upload; this is not a
 zero-copy GPU capture pipeline.

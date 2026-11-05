@@ -5,6 +5,57 @@ at [docs](../docs/README.md).
 
 **Current verdict: PARTIAL.**
 
+## Pure Wi-Fi/TCP validation (2026-11-05)
+
+**Core Wi-Fi function: PASS. Long-term video stability: PARTIAL.**
+
+The launcher now supports `-Transport WiFi -ListenAddress 192.168.1.16`
+without an ADB executable, tablet serial, USB cable or reverse mapping. It
+requires an explicitly assigned RFC1918 IPv4 on a Private/domain profile;
+USB remains the default. No firewall, network-profile or elevation changes
+were made.
+
+The PC Ethernet interface was Private and the tablet WLAN address was
+192.168.1.32. Host logs confirm QR enrollment and remembered reconnects from
+that LAN address, not loopback. With USB unplugged, the owner confirmed mirrored
+video, real-pen strokes and shapes visible on the PC, Pointer mode, unified
+Clear and reconnect without another QR.
+
+The first session had an encoded-frame handoff exceeding the existing 100 ms
+bound. The owner reported a display switch stuck at Loading, then successful
+switching after restarting the app. The client previously retained control
+after video failure, permitted more display switches, and could overwrite the
+video error with Loading. It now ends the failed session explicitly, exposes
+Connect/error controls, imposes a 10-second rendered/readiness deadline and
+disables the selector until readiness. Android control/video sockets also
+enable TCP_NODELAY. The host doctor no longer incorrectly reports Wi-Fi disabled.
+
+Validation of the final APK:
+
+- 10 launcher preflight regressions pass on PowerShell 7/Pester 3.4; actual
+  LAN `-WhatIf` succeeds with a nonexistent ADB path. Windows PowerShell 5.1
+  execution was blocked by its existing unsigned-script policy; that policy
+  was not bypassed or changed.
+- 31 Android unit tests, APK build/lint, 32 ordinary host tests, native host
+  build, formatting and strict Clippy pass.
+- USB was temporarily attached only for APK installation/UI automation; its
+  ADB reverse list was empty and the running host remained bound to the LAN IP.
+  Nine consecutive display switches passed readiness checks on the final APK.
+- Controlled termination of the test host's own FFmpeg child verified that
+  capture failure ends the session, displays the video error and Connect
+  control, and disables further source changes rather than retaining Loading.
+- After unplugging USB again, the owner confirmed video, display switching and
+  pen drawing all work with the final APK.
+- The temporary validation host was stopped after the tablet disconnected.
+  Start another Wi-Fi host with the launcher; no test service was left running.
+
+Remaining limitations: one stored PC endpoint means USB/LAN or DHCP-address
+changes require deliberate re-pairing; there is no automatic discovery,
+endpoint migration, congestion adaptation or video recovery. The original
+handoff timeout is recorded, not claimed eliminated. Long Wi-Fi soak,
+glass-to-glass latency and fullscreen/projector acceptance remain outstanding.
+Linux and QUIC remain DEFERRED.
+
 ## Verified environment and builds
 
 - Windows 11 Pro build 26300, interactive console session; Rust 1.98.1 and

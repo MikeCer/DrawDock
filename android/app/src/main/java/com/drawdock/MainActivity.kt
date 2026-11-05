@@ -131,7 +131,8 @@ class MainActivity : ComponentActivity() {
             override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
                 val selected = sources.getOrNull(position)?.first ?: return
-                if (!sessionActive || selected == sourceName || pendingSourceRequestId != null) return
+                if (!sessionActive || videoFailed || readyEpoch != sourceEpoch ||
+                    selected == sourceName || pendingSourceRequestId != null) return
                 inputView.cancelActiveContact()
                 inputView.setInputReady(false)
                 val request = sessionClient?.selectSource(selected)
@@ -539,6 +540,15 @@ class MainActivity : ComponentActivity() {
         inputView.clear()
         inputView.setInputReady(false)
         screenSelector.setSelection(sources.indexOfFirst { it.first == sourceName }.coerceAtLeast(0))
+        screenSelector.isEnabled = false
+        val generation = sessionGeneration
+        val epoch = sourceEpoch
+        workspace.postDelayed({
+            if (generation == sessionGeneration && sessionClient != null &&
+                sourceEpoch == epoch && readyEpoch != epoch) {
+                failVideo("PC screen did not become ready within 10 seconds; reconnect required.")
+            }
+        }, 10_000)
     }
 
     private fun requestModeChange() {
@@ -655,7 +665,7 @@ class MainActivity : ComponentActivity() {
                 "Host: ${invitation.host}:${invitation.port}\n\n" +
                     "Connect only if you scanned the QR displayed by your own PC. " +
                     "The PC will ask you to approve this tablet. " +
-                    "USB connections require ADB reverse.",
+                    "USB connections require ADB reverse; Wi-Fi uses the PC's private LAN IP without USB.",
             )
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Connect") { _, _ ->
@@ -757,7 +767,7 @@ class MainActivity : ComponentActivity() {
                         refreshInputReady()
                         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                         connectionButton.text = "Disconnect"
-                        screenSelector.isEnabled = pendingSourceRequestId == null
+                        screenSelector.isEnabled = readyEpoch == sourceEpoch && pendingSourceRequestId == null
                     } else {
                         inputView.setInputReady(false)
                         inputView.drawMode = true
@@ -832,7 +842,6 @@ class MainActivity : ComponentActivity() {
                 if (generation == sessionGeneration && requestId == pendingSourceRequestId) {
                     pendingSourceRequestId = null
                     applySelectedSource(selected)
-                    screenSelector.isEnabled = true
                     statusText.text = "Loading $sourceName…"
                 }
             },
@@ -841,6 +850,7 @@ class MainActivity : ComponentActivity() {
                     readyEpoch = epoch
                     pendingReadyEpoch = null
                     inputView.remoteVideoVisible = true
+                    screenSelector.isEnabled = true
                     refreshInputReady()
                     toolsMenu.visibility = View.GONE
                     menuButton.text = "Settings"
@@ -868,11 +878,7 @@ class MainActivity : ComponentActivity() {
             },
             onVideoError = { message ->
                 if (generation == sessionGeneration) {
-                    videoFailed = true
-                    inputView.setInputReady(false)
-                    statusText.text = "Video unavailable: $message. Reconnect required."
-                    toolsMenu.visibility = View.VISIBLE
-                    menuButton.text = "Hide settings"
+                    failVideo("Video unavailable: $message. Reconnect required.")
                 }
             },
             rememberedDeviceId = deviceId,
@@ -920,6 +926,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
             .show()
+    }
+
+    private fun failVideo(message: String) {
+        disconnectSession()
+        toolsMenu.visibility = View.VISIBLE
+        menuButton.text = "Hide settings"
+        notifyDrawing(message)
     }
 
     private fun disconnectSession() {

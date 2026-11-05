@@ -39,6 +39,8 @@ and defaults to NVENC. Override them for your environment. Use
 
 | Option | Behavior |
 |---|---|
+| `-Transport USB\|WiFi` | USB by default; WiFi uses no ADB |
+| `-ListenAddress` | Required with WiFi: explicit assigned RFC1918 IPv4 on a Private/domain profile |
 | `-Output` | Selected Windows output device name |
 | `-Port` | Control/video TCP port; default 47831 |
 | `-DeviceSerial` / `-AdbPath` | Explicit ADB target and executable |
@@ -89,19 +91,52 @@ Diagnostic output is a machine snapshot, not an interactive test result.
 
 ## Private-network connections
 
-Choose a private IP actually assigned to the host interface. The USB launcher
-always uses loopback; use direct CLI for a private-network listener:
+Choose a private IPv4 actually assigned to the host's LAN interface. The PC can
+use Ethernet while the tablet uses Wi-Fi on the same LAN. List addresses and
+profiles first; avoid virtual adapters, guest networks and client-isolated Wi-Fi:
 
 ```powershell
-# Replace this example address with your assigned private address.
-& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
-    --listen 192.168.1.10 --port 47831 --pair --video-encoder software
+Get-NetIPConfiguration
+Get-NetConnectionProfile
+# Replace this example address with your assigned private LAN address.
+.\Start-DrawDockHost.ps1 -Transport WiFi -ListenAddress 192.168.1.10 `
+    -Output '\\.\DISPLAY2' -Pair -VideoEncoder software
 ```
 
-Pair using the invitation for that endpoint. ADB reverse is not used for this
-connection. Android saves one endpoint, so switching from loopback/USB requires
-deliberate re-pairing. Follow your network/firewall policy; the application does
-not create an exception automatically.
+This mode does not inspect ADB, require a tablet serial or create/remove reverse
+mappings. It rejects wildcard/public/loopback/link-local addresses, unassigned
+addresses and interfaces without a Private or DomainAuthenticated profile.
+`-WhatIf` performs read-only preflight without starting a listener.
+
+Disconnect USB for a pure Wi-Fi test. In tablet Settings choose **Pair another
+PC**, scan the new LAN invitation, confirm its IP and approve on the PC.
+Afterward **Connect** uses that saved LAN endpoint. Android currently saves one
+endpoint, so switching from loopback/USB (or changing the PC's DHCP address)
+requires deliberate re-pairing. It does not discover hosts or migrate endpoints
+automatically. Consider a router DHCP reservation for a stable PC address.
+
+Control and H.264 video use two authenticated TLS/TCP connections on the same
+port. No ADB-over-Wi-Fi, QUIC, public listener or certificate bypass is needed.
+Direct CLI also supports `serve --listen <private-IP>`.
+
+Follow network/firewall policy. Neither launcher nor host changes the network
+profile, elevates or installs firewall exceptions. If connections time out,
+check client isolation, routing and a scoped inbound TCP rule. An administrator
+may approve/run this example, restricted to the executable, local IP, TCP port,
+Private profile and tablet IP (replace all example values):
+
+```powershell
+# Only after explicit approval; do not run automatically.
+New-NetFirewallRule -DisplayName 'DrawDock tablet TLS' -Direction Inbound `
+    -Action Allow -Program (Resolve-Path .\target\debug\dd-host.exe).Path `
+    -Protocol TCP -LocalAddress 192.168.1.10 -LocalPort 47831 `
+    -RemoteAddress 192.168.1.20 -Profile Private
+```
+
+An existing blocking rule or managed policy can still override an allow rule.
+Validate mirrored video, stylus annotation on the physical PC, pointer mode,
+Clear, reconnect and stability; local listener checks alone do not prove tablet
+Wi-Fi or fullscreen acceptance.
 
 ## Remembered devices
 

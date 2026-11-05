@@ -60,6 +60,14 @@ if ($LASTEXITCODE -ne 0) { throw 'Rust build failed' }
 Running the batch setup in one process and Cargo in another loses the compiler,
 linker and SDK environment.
 
+Launcher preflight regressions use the installed Pester module and built host
+diagnostics. Network/profile queries and ADB are mocked; no listener or firewall
+change is performed:
+
+```powershell
+Invoke-Pester .\tests\Start-DrawDockHost.Tests.ps1
+```
+
 ## Android build and checks
 
 Set process-local paths to your installations:

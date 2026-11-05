@@ -77,6 +77,22 @@ tablet or re-enrollment, open an invitation with host `--pair` or launcher
 `-Restart -Pair`. Changing IP/transport requires deliberate pairing for the
 new endpoint. See [pairing and threat model](pairing-and-threat-model.md).
 
+## Wi-Fi without USB or ADB
+
+Start the [private-network launcher](run-windows.md#private-network-connections)
+with `-Transport WiFi -ListenAddress <PC-LAN-IP> -Pair`. Connect the tablet to
+the same trusted LAN and unplug USB to exclude ADB forwarding from the test.
+In Settings choose **Pair another PC**, scan the LAN QR, confirm its private IP
+and approve the tablet on the PC. **Connect** afterward reuses the saved LAN
+endpoint with the same certificate pinning and protected reconnect credential.
+
+The app already supports private-IP control and video sockets using its
+`INTERNET` permission; normal IPv4 LAN operation does not require an Android
+permission or wireless-debugging setup. It stores one endpoint, not a list of
+USB/Wi-Fi alternatives. Re-pair deliberately when switching transport or when
+the PC IP changes. Guest/client-isolated Wi-Fi or a PC firewall can block TCP
+even when both devices have internet access.
+
 ## Workspace
 
 The top dropdown selects the PC monitor. Video and ink share an aspect-fit
@@ -90,7 +106,10 @@ clipboard image paste and Clear.
 
 Backgrounding the app ends the session and clears its host annotations/history.
 Copy a clipboard image before connecting, or reconnect after copying. If video
-fails, drawing is suspended and the app reports reconnection is required.
+fails, the session ends and the app reports reconnection is required. A selected
+screen must render and acknowledge readiness within 10 seconds, otherwise the
+session ends explicitly instead of remaining on Loading. The monitor selector
+is disabled until the current screen is ready.
 
 ## Optional ADB invitation delivery
 
@@ -133,6 +152,8 @@ delivery. Do not publish its contents.
 |---|---|
 | ADB device missing/unauthorized | USB debugging, cable, selected serial and device-side authorization |
 | Connect fails on loopback | Host process, matching port and tablet reverse mapping |
+| LAN connect times out | Correct PC private IP/profile, same LAN, client isolation and scoped firewall rule |
+| Connect still targets USB after switching to Wi-Fi | Pair another PC with the new LAN invitation |
 | Host requests new pairing | Invitation/revocation state and saved endpoint; reopen enrollment deliberately |
 | Pin mismatch or protected-store error | Correct PC identity/permissions; never disable pinning or silently reset trust |
 | Video unavailable/input suspended | FFmpeg/encoder output, decoder capabilities and source geometry; reconnect |

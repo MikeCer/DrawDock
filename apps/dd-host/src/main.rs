@@ -56,8 +56,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
                 "native_overlay": "implemented; interactive fullscreen behavior not yet verified",
                 "output_count": outputs.len(),
                 "outputs": outputs,
-                "tablet_connectivity": "not probed; verify with adb devices -l",
-                "wifi_listener": "disabled",
+                "tablet_connectivity": "not probed; USB uses ADB, Wi-Fi uses the selected private LAN IP",
+                "wifi_listener": "supported with explicit private --listen IP; not started by doctor",
                 "linux": "DEFERRED",
                 "quic": "DEFERRED"
             });
