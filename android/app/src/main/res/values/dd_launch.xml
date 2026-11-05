@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="dd_launcher_background">#F0F7FF</color>
+    <style name="Base.Theme.DrawDock.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/dd_ui_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/dd_splash_icon</item>
+        <item name="postSplashScreenTheme">@style/Theme.DrawDock</item>
+        <item name="android:statusBarColor">@color/dd_ui_background</item>
+        <item name="android:navigationBarColor">@color/dd_ui_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+    <style name="Theme.DrawDock.Starting" parent="Base.Theme.DrawDock.Starting" />
+</resources>

@@ -46,9 +46,8 @@ graphics/tokens into the Android component without referencing that folder.
 
 ## Milestone 2: Android radial menu (2026-11-05)
 
-**Implementation and automated checks complete; owner pen/visual review and
-commit pending. The owner subsequently requested milestone 3 styling in the
-same pre-commit review batch.**
+**Owner committed milestones 2 and 3 as `84bbbd2` and approved milestone 4.
+The owner requested milestone 3 styling in the same pre-commit review batch.**
 
 - Added 38 vector sources and menu-only typed color/dimension resources within
   Android. The APK has no dependency on the ignored design kit, and no new
@@ -97,8 +96,8 @@ live applications. No commit was created automatically.
 
 ## Milestone 3: header, settings and dialogs (2026-11-05)
 
-**Implemented at the owner's request before committing milestone 2. Final
-APK installed; owner visual review and commit pending. Stop before milestone 4.**
+**Implemented at the owner's request before committing milestone 2; owner
+subsequently committed both as `84bbbd2` and approved milestone 4.**
 
 - Replaced the light stock app theme with a native navy/cyan Views theme and
   shared rounded button, field, panel and dialog resources. No runtime
@@ -133,12 +132,64 @@ Physical pen/TalkBack review and previous fullscreen/projector acceptance gaps
 remain owner checks. Launcher/adaptive-icon/system-splash artwork is deferred
 to milestone 4. No automatic commit was made.
 
+## Milestone 4: adaptive launcher and system splash (2026-11-05)
+
+**Implemented, installed and verified on the API 36 tablet. Stopped for owner
+visual review and optional commit; API 30 runtime rendering remains unverified.**
+
+- Added the adaptive icon to both manifest launcher declarations, using five
+  original density PNGs and the supplied light background.
+- The supplied foreground exceeded Android's 66 dp circular safe zone. A native
+  8% inset on each edge keeps the entire artwork safe without altering source
+  pixels, colors or proportions.
+- Added the static transparent splash PNG and AndroidX `core-splashscreen`
+  1.2.0 for API 30 compatibility and native API 31+ behavior. The starting theme
+  hands off to the existing native app theme before constructing Views.
+- API 33+ requests the icon rather than a plain-color starting window.
+  No splash activity, timer, retention condition, connection wait, new artwork
+  or onboarding was added.
+- The six PNGs total 208,222 bytes. All graphics and XML live within Android;
+  no build/runtime dependency on the ignored design kit was introduced.
+
+Validation:
+
+| Result | Evidence |
+|---|---|
+| PASS | Final `testDebugUnitTest assembleDebug lintDebug`: 34 JVM tests, zero failures/errors; APK build and lint pass with zero errors |
+| PASS | All six imported PNGs are byte-identical to their sources; all five inset foreground variants fit the 66 dp safe circle |
+| PASS | Actual tablet launcher tile displays the complete branded icon and opens the cold application |
+| PASS | Screen recordings show the supplied icon on navy during both cold launch and warm activity creation, with a single splash sequence and handoff to the branded controls |
+| PASS | Hot resume retains the app process, shows no new splash and returns to usable controls; no fatal exception found in the scoped application log |
+| PASS | Header/panel colors, 48 dp controls, settings/Pen tools, pairing/manual labels and invalid-port rejection pass after the theme handoff |
+| PASS | Forget, Text and Clear dialogs retain styling and cancellation; remembered pairing was not deleted or replaced |
+| PASS | Resource XMLs parse, all six launch PNGs are packaged in the APK, and source/build files do not reference the ignored kit; patch whitespace passes |
+| PARTIAL | No API 30 device or installed emulator image is available; compatibility integration builds, but API 30 runtime rendering is unverified |
+| DEFERRED | Optional monochrome/themed launcher artwork was not supplied; lint has 59 warnings, including its new monochrome advisory and 58 existing warnings |
+
+Initial recordings exposed the plain-color window on a shell-initiated warm
+launch; the API 33 icon preference addresses that gap.
+The device harness also needed the supported numeric NEW_TASK/CLEAR_TASK flags
+instead of an unsupported shell option, and fade-aware pixel thresholds:
+the native warm transition need not contain a fully opaque icon frame.
+Final recordings were inspected and the corrected checks pass without adding
+any app-side delay. These test details do not change app input, connection or
+trust behavior.
+
+Session-local `Test-DrawDockLaunch.py`, launch recordings, representative PNGs
+and `brand-launch-results.json` preserve the evidence. The existing chrome
+harness passed its basic phase on the final APK. Temporary tablet test files
+and extracted scratch frames were removed; evidence remains outside the repo.
+
+No system-wide settings, firewall rules or stored pairing were changed.
+No automatic commit was made. Existing physical-pen/fullscreen/projector
+acceptance gaps are unchanged; Linux and QUIC remain DEFERRED.
+
 ## Owner-gated milestone plan
 
 | Milestone | Scope | Gate |
 |---|---|---|
-| 2 | Android Views radial-menu tokens, icons and visual states | Implemented and installed; stopped for owner tablet review/commit |
-| 3 | Header/settings and dialogs; preserve canvas rendering | Owner requested adding it before the milestone 2 commit; implemented/installed, stopped for review |
-| 4 | Adaptive launcher and API-compatible system splash | Owner approves milestone 3; illustrated onboarding remains optional, separate scope |
+| 2 | Android Views radial-menu tokens, icons and visual states | Committed by owner as `84bbbd2` with milestone 3 |
+| 3 | Header/settings and dialogs; preserve canvas rendering | Committed by owner as `84bbbd2`; owner approved milestone 4 |
+| 4 | Adaptive launcher and API-compatible system splash | Implemented and device-verified on API 36; stopped for owner review/commit, API 30 runtime unverified |
 
 Do not roll these milestones into one change or create commits automatically.

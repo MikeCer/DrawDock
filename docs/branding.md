@@ -172,6 +172,51 @@ the native theme. Pair/Forget retain readable text labels because the supplied
 icon map has no dedicated icons for those actions. Launcher/splash artwork is
 independent of this control styling.
 
+## Launcher icon and system splash
+
+The application declares `ic_dd_launcher` for both its regular and round icon.
+Its adaptive layers use the original transparent foreground on the supplied
+light `#F0F7FF` background. The foreground wrapper adds an 8% inset on each
+edge, uniformly scaling the artwork into Android's 66 dp safe circle inside
+the 108 dp layer. This prevents circular masks from clipping the monitor.
+It does not stretch, crop or recolor the PNGs.
+
+The minimum Android version is API 30, so legacy pre-adaptive launcher bitmaps
+are not bundled. A monochrome themed icon is not declared: it needs a dedicated
+silhouette rather than the opaque tablet panel from the multicolor foreground.
+
+Only `MainActivity` uses `Theme.DrawDock.Starting`. AndroidX
+`core-splashscreen` supplies the API 30 compatibility implementation and delegates
+to the native system splash on API 31+. `installSplashScreen()` runs before
+`super.onCreate()` and applies `Theme.DrawDock` through `postSplashScreenTheme`
+before the normal Views are constructed. Other activities retain the application
+theme, including the QR scanner.
+
+The splash uses a navy background and the supplied transparent, static icon.
+The xxxhdpi PNG is 1152x1152 pixels, corresponding to the 288 dp icon canvas;
+its artwork fits the central 192 dp safe circle. API 33+ requests
+`icon_preferred` so the system does not substitute a plain-color launch window.
+There is no custom splash activity, retention condition, timer, added animation
+or illustrated onboarding. Network connection and video readiness do not hold
+the splash; normal intent handling and remembered pairing remain independent.
+Returning to an already-created activity uses the normal system resume path.
+
+All launch graphics are Android-owned:
+
+| Source under `android/app/src/main/res` | Responsibility |
+|---|---|
+| `mipmap-anydpi-v26/ic_dd_launcher.xml` | Adaptive icon shared by regular and round launcher declarations |
+| `mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_dd_launcher_artwork.png` | Five original foreground density variants |
+| `drawable/ic_dd_launcher_foreground.xml` | Uniform safe-zone inset without modifying source pixels |
+| `drawable-xxxhdpi/dd_splash_icon.png` | Static transparent splash artwork |
+| `values/dd_launch.xml` | Launcher background, shared starting theme and app-theme handoff |
+| `values-v33/dd_launch.xml` | Android 13+ native icon-preference attribute |
+
+Edit these component-owned resources directly; no export step or ignored kit
+is needed. Keep adaptive and splash safe zones when replacing artwork, and
+verify an actual cold launch, warm activity creation and hot resume in addition
+to building the APK.
+
 ## Android integration boundaries
 
 Use the existing Kotlin Views/custom Canvas implementation; a Compose migration

@@ -26,6 +26,7 @@ import android.text.InputFilter
 import android.util.TypedValue
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import org.json.JSONArray
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
     private var selectedWidth = 6f
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
 
         inputView = InkInputView(this)
