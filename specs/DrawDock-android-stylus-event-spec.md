@@ -1,7 +1,9 @@
 # DrawDock — Android Stylus Input and Event Handling Specification
 
 Document ID: DD-ANDROID-001 | Version: 0.2 | Date: 2026-11-04  
-Companions: `DrawDock-rust-overlay-architecture.md` and `DrawDock-feasibility-agent-instructions.md`.
+Companion: `DrawDock-rust-overlay-architecture.md`.
+
+This technical proposal is a design input, not a description of every implemented feature. See [the contributor documentation](../docs/README.md) for the current Windows/Android contract.
 
 ## 1. Purpose and terminology
 

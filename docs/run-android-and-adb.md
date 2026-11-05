@@ -43,7 +43,9 @@ it. Control and video both use this single port. Start the loopback host in a
 separate PowerShell:
 
 ```powershell
-& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
+& .\target\debug\dd-host.exe outputs
+$output = Read-Host 'Paste the exact output name printed above'
+& .\target\debug\dd-host.exe serve --output $output `
     --listen 127.0.0.1 --port 47831 --video-encoder software
 ```
 
@@ -117,10 +119,12 @@ Prefer QR for normal pairing. For explicitly chosen USB automation, the host
 can create a new invitation file. In the host console:
 
 ```powershell
+& .\target\debug\dd-host.exe outputs
+$output = Read-Host 'Paste the exact output name printed above'
 $pairingInfoPath = Join-Path $env:LOCALAPPDATA `
     ('DrawDock-invitation-' + [guid]::NewGuid().ToString('N') + '.json')
 $pairingInfoPath
-& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
+& .\target\debug\dd-host.exe serve --output $output `
     --pairing-info $pairingInfoPath --video-encoder software
 ```
 

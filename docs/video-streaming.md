@@ -54,8 +54,8 @@ decoder while still requiring matching texture-latched epochs for readiness.
 | `software` | `libx264` | veryfast, zerolatency, CRF 18, four threads, AUD/repeated headers, fixed key interval, no scene cut |
 | `nvenc` | `h264_nvenc` | P5, ultra-low-latency, VBR/CQ 18, 12 Mbit/s target, zero lookahead/delay, spatial AQ, AUD and forced IDR |
 
-Direct `dd-host serve` defaults to software. The PowerShell launcher defaults to
-NVENC; select `-VideoEncoder software` on systems without a compatible encoder.
+Direct `dd-host serve` and the PowerShell launcher default to software.
+Select `-VideoEncoder nvenc` only on systems with a compatible encoder.
 Failure is explicit, not a silent fallback to a different encoder.
 
 ## Backpressure and cleanup
@@ -98,8 +98,8 @@ a new video connection starts a fresh clock/timeline.
 
 This is conservative attribution, not an exact capture-completion fence.
 Capture/compositor and texture-update timing can briefly show both provisional
-and returned translucent ink. Recorded highlighter tests expose that extra
-opacity; do not describe the handoff as pixel-identical or overlap-free.
+and returned translucent ink, temporarily increasing highlighter opacity.
+Do not describe the handoff as pixel-identical or overlap-free.
 
 Any change to capture inclusion/exclusion or presentation acknowledgement must
 update the host configuration, Android rendering policy and readiness/revision
@@ -127,8 +127,8 @@ resource-lifecycle boundaries.
 
 For changes, distinguish image quality at a given configuration/bitrate,
 unpaced encoder throughput, capture/transport delay and actual input-to-photon
-latency. Keep measurements and hardware-specific results in project records
-rather than this implementation guide.
+latency. Include measurements, hardware configuration and test limitations in
+the relevant issue or pull request rather than this implementation guide.
 
 For native laser motion, the presenter caches a small premultiplied sprite,
 moves it without raising it above Magnifier, and clips it at monitor edges.

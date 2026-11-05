@@ -5,7 +5,9 @@ Status: implementation proposal for feasibility testing, not proof of compatibil
 
 ## 1. Authority and companion documents
 
-Companions: `DrawDock-android-stylus-event-spec.md` (DD-ANDROID-001), `DrawDock-feasibility-agent-instructions.md` (DD-AGENT-001), and the earlier `DrawDock-prototype-spec-draft.md` when available.
+Companions: `DrawDock-android-stylus-event-spec.md` (DD-ANDROID-001) and `DrawDock-prototype-spec-draft.md`.
+
+This technical proposal includes future cross-platform work. For the current Windows implementation and contributor commands, use [the documentation](../docs/README.md). Linux adapters and QUIC remain deferred.
 
 This document supersedes any earlier suggestion that host-visible annotations may be omitted, replaced with tablet-only ink, or accepted through a capture-only fallback. The user's mandatory requirement is authoritative: draw on the live PC screen using a tablet pen during presentations, on Windows 11 and explicitly supported Linux X11/Wayland configurations. Fullscreen presentation annotations are a release gate, not optional polish.
 

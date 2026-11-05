@@ -3,15 +3,15 @@ param(
     [ValidateSet('USB', 'WiFi')]
     [string]$Transport = 'USB',
     [string]$ListenAddress,
-    [string]$Output = '\\.\DISPLAY2',
+    [string]$Output,
     [ValidateRange(1, 65535)]
     [int]$Port = 47831,
-    [string]$DeviceSerial = 'cfa3e5dce217',
-    [string]$AdbPath = 'D:\Tools\android-dev\platform-tools\adb.exe',
+    [string]$DeviceSerial,
+    [string]$AdbPath,
     [switch]$Restart,
     [switch]$Pair,
     [ValidateSet('nvenc', 'software')]
-    [string]$VideoEncoder = 'nvenc'
+    [string]$VideoEncoder = 'software'
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +20,9 @@ $hostExe = Join-Path $PSScriptRoot 'target\debug\dd-host.exe'
 
 if (-not (Test-Path -LiteralPath $hostExe -PathType Leaf)) {
     throw "Host executable not found. Build it first: cargo build -p dd-host"
+}
+if ([string]::IsNullOrWhiteSpace($Output)) {
+    throw 'Specify -Output with an exact device name from: .\target\debug\dd-host.exe outputs'
 }
 $bindAddress = '127.0.0.1'
 if ($Transport -eq 'WiFi') {
@@ -51,7 +54,11 @@ if ($Transport -eq 'WiFi') {
     if ($PSBoundParameters.ContainsKey('ListenAddress')) {
         throw '-ListenAddress is only supported with -Transport WiFi. USB always binds to 127.0.0.1.'
     }
-    if (-not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) {
+    if ([string]::IsNullOrWhiteSpace($DeviceSerial)) {
+        throw 'USB requires -DeviceSerial with an explicitly selected authorized ADB device.'
+    }
+    if ([string]::IsNullOrWhiteSpace($AdbPath) -or
+        -not (Test-Path -LiteralPath $AdbPath -PathType Leaf)) {
         throw "ADB not found at '$AdbPath'. Specify -AdbPath with its full path."
     }
 }

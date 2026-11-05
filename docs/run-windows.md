@@ -10,9 +10,15 @@ cargo build -p dd-host
 & .\target\debug\dd-host.exe outputs
 ```
 
-Select an exact device name printed by `outputs`; examples below use
-`\\.\DISPLAY2`. Enumerate again after changing monitors, display modes or DPI
-configuration rather than copying another machine's geometry.
+Select an exact device name printed by `outputs` and keep it in `$output` for
+the commands below:
+
+```powershell
+$output = Read-Host 'Paste the exact output name printed above'
+```
+
+Enumerate again after changing monitors, display modes or DPI configuration
+rather than copying another machine's geometry.
 
 ## Native Windows launcher
 
@@ -43,8 +49,9 @@ future launches.
 The launcher has a fixed-size, non-resizable taskbar window and a
 notification-area (tray) icon.
 All listeners start **off**. Select the output, port, encoder and authorized USB
-device before enabling a listener. ADB is discovered from the Android SDK
-environment or PATH; **Browse ADB...** can select an explicit executable.
+device before enabling a listener. ADB is discovered from the bundled runtime,
+then the Android SDK environment or PATH; **Browse ADB...** can select an
+explicit executable.
 Choose NVENC only with compatible NVIDIA hardware and FFmpeg.
 
 Select a listener row, then **Enable selected** or **Disable selected**.
@@ -89,7 +96,8 @@ The UI is native Rust/Win32, not WPF or a PowerShell GUI. Read-only built-in
 Windows PowerShell queries discover interface addresses/profiles. No elevation,
 firewall/profile changes, Windows startup registration, public listener or
 certificate bypass is performed. Keep `drawdock-launcher.exe` beside
-`dd-host.exe`; FFmpeg and ADB retain their existing prerequisites.
+`dd-host.exe`. Installed/portable packages include FFmpeg and ADB; development
+builds need the tools described in [development setup](development.md).
 
 ## PowerShell USB launcher
 
@@ -99,7 +107,7 @@ Connect and authorize the tablet in ADB. Set your paths/device explicitly:
 $adb = 'C:\Path\To\Android\Sdk\platform-tools\adb.exe'
 & $adb devices -l
 $serial = '<authorized-device-serial>'
-$output = '\\.\DISPLAY2'
+# Set $output using the output enumeration above.
 
 .\Start-DrawDockHost.ps1 -Output $output -DeviceSerial $serial `
     -AdbPath $adb -VideoEncoder software
@@ -110,18 +118,18 @@ debug host on loopback. It refuses to overwrite a conflicting reverse mapping.
 Ctrl+C stops the foreground host; cleanup removes only forwarding created by
 that invocation.
 
-The script contains machine-specific defaults for output, serial and ADB path,
-and defaults to NVENC. Override them for your environment. Use
-`-VideoEncoder nvenc` only with a compatible encoder.
+The output must always be selected explicitly; USB also requires the ADB path
+and authorized serial. Software encoding is the default.
+Use `-VideoEncoder nvenc` only with a compatible encoder.
 
 | Option | Behavior |
 |---|---|
 | `-Transport USB\|WiFi` | USB by default; WiFi uses no ADB |
 | `-ListenAddress` | Required with WiFi: explicit assigned RFC1918 IPv4 on a Private/domain profile |
-| `-Output` | Selected Windows output device name |
+| `-Output` | Required: selected Windows output device name |
 | `-Port` | Control/video TCP port; default 47831 |
-| `-DeviceSerial` / `-AdbPath` | Explicit ADB target and executable |
-| `-VideoEncoder software\|nvenc` | Encoder selection; no silent fallback |
+| `-DeviceSerial` / `-AdbPath` | Required for USB: explicit ADB target and executable |
+| `-VideoEncoder software\|nvenc` | Software by default; no silent fallback |
 | `-Restart` | Stop only hosts using this workspace's debug executable, then restart |
 | `-Pair` | Open an invitation for new enrollment even with remembered devices |
 | `-WhatIf` | Read-only preflight without process/mapping changes |
@@ -137,7 +145,7 @@ For manual transport setup, manage the ADB reverse mapping as described in
 Direct CLI uses software encoding unless explicitly overridden:
 
 ```powershell
-& .\target\debug\dd-host.exe serve --output '\\.\DISPLAY2' `
+& .\target\debug\dd-host.exe serve --output $output `
     --listen 127.0.0.1 --port 47831 --video-encoder software
 ```
 
@@ -158,9 +166,10 @@ Replay and diagnostics:
 
 ```powershell
 & .\target\debug\dd-host.exe replay .\tests\fixtures\basic-scene.json `
-    --output '\\.\DISPLAY2'
+    --output $output
 # Stop the replay with Ctrl+C before the next command.
-& .\target\debug\dd-host.exe doctor --output .\project-status\doctor.json
+New-Item -ItemType Directory -Path .\reports -Force | Out-Null
+& .\target\debug\dd-host.exe doctor --output .\reports\doctor.json
 ```
 
 Replay uses the same native presenter, without opening a network listener.
@@ -177,7 +186,7 @@ Get-NetIPConfiguration
 Get-NetConnectionProfile
 # Replace this example address with your assigned private LAN address.
 .\Start-DrawDockHost.ps1 -Transport WiFi -ListenAddress 192.168.1.10 `
-    -Output '\\.\DISPLAY2' -Pair -VideoEncoder software
+    -Output $output -Pair -VideoEncoder software
 ```
 
 This mode does not inspect ADB, require a tablet serial or create/remove reverse
@@ -238,7 +247,7 @@ Set a direct FFmpeg executable path if needed:
 
 ```powershell
 $env:DRAWDOCK_FFMPEG = 'C:\Path\To\ffmpeg.exe'
-& .\target\debug\dd-host.exe video-probe --output '\\.\DISPLAY2' `
+& .\target\debug\dd-host.exe video-probe --output $output `
     --video-encoder software
 ```
 

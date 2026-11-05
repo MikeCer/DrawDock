@@ -23,17 +23,19 @@ New pairing requires an open, unexpired, single-use invitation and native PC
 approval. Resume requires a recognized, unrevoked credential. Authentication
 failure returns `authentication_failed` with a message and closes that attempt.
 
-Successful authentication returns:
+Successful authentication returns the structure below. The source name and
+1920x1080 bounds are illustrative, not a required monitor configuration;
+clients must use the geometry actually supplied by the host.
 
 ```json
 {
   "type": "paired",
   "version": 2,
   "sources": [
-    {"name":"\\\\.\\DISPLAY2","left":0,"top":0,"right":2560,"bottom":1440,"primary":true}
+    {"name":"\\\\.\\DISPLAY1","left":0,"top":0,"right":1920,"bottom":1080,"primary":true}
   ],
   "selected": {
-    "source":{"name":"\\\\.\\DISPLAY2","left":0,"top":0,"right":2560,"bottom":1440,"primary":true},
+    "source":{"name":"\\\\.\\DISPLAY1","left":0,"top":0,"right":1920,"bottom":1080,"primary":true},
     "source_epoch":1,
     "zoom":{"scale":1,"left":0,"top":0}
   },
@@ -57,7 +59,7 @@ Do not retag already queued coordinates with a new epoch.
 `select_source` carries `source`, `request_id` and the current epoch:
 
 ```json
-{"type":"select_source","source":"\\\\.\\DISPLAY2","request_id":1,"source_epoch":1}
+{"type":"select_source","source":"\\\\.\\DISPLAY1","request_id":1,"source_epoch":1}
 ```
 
 The host releases buttons, cancels the transaction/laser, saves/restores that

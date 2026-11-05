@@ -14,12 +14,13 @@ from the annotation palette below.
 Each component owns the graphics and styling sources it uses. Documentation
 images are checked in under `docs/assets/brand`; Android graphics and tokens
 belong in its own resource tree when integrated. A fresh clone must render,
-build and run without the original design kit.
+build and run without regenerating design assets.
 
-The root `brand` folder is an optional, ignored local design workspace, not a
-published dependency. Do not link documentation to it or load application
-resources from it. This guide records the approved visual and compatibility
-rules independently of that workspace.
+The optional Copilot [branding skill](../.github/skills/drawdock-brand-ui/SKILL.md)
+owns design references, master assets and generators under
+`.github/skills/drawdock-brand-ui`. Application resources remain component-owned;
+neither app loads skill assets at runtime. This guide's compatibility rules
+override conflicting skill samples.
 
 | Surface | Asset and treatment |
 |---|---|
@@ -39,10 +40,10 @@ labels alongside unfamiliar icons, and never rely on color alone for meaning.
 
 The host ICO contains 16-256 px versions derived from the approved
 Android-owned launcher artwork. It is embedded at build time for the window,
-taskbar and tray; neither application reads the ignored design kit at runtime.
+taskbar and tray; neither application reads the design kit at runtime.
 Launcher controls retain native keyboard/accessibility semantics, text
-ON/OFF listener labels and focus feedback. The executable has runtime icons,
-not an installer, startup shortcut or shell icon resource.
+ON/OFF listener labels and focus feedback. Executable icon/version resources and
+installer shortcuts are described in [builds and releases](releasing.md).
 
 Android eight-digit colors use ARGB (`#AARRGGBB`). Convert explicitly for SVG/CSS;
 an eight-digit CSS color uses a different channel order. Standalone SVG icon
@@ -131,7 +132,7 @@ The Android-owned sources are:
 | `android/app/src/main/res/values/dd_menu_dimens.xml` | Menu dimensions, scaled label sizes and width previews |
 | `RadialMenuGeometry.kt` / `RadialMenuGeometryTest.kt` | Edge placement, nonoverlapping targets and small-window fallback decisions |
 
-Edit these sources directly. They are not generated from the ignored kit.
+Edit these sources directly. They are not generated from the skill templates.
 No new runtime dependency, Compose migration or external graphics path is
 required. Annotation palette, host scene rendering, selection handles and
 canvas gesture handling remain independent of menu styling.
@@ -228,7 +229,7 @@ All launch graphics are Android-owned:
 | `values/dd_launch.xml` | Launcher background, shared starting theme and app-theme handoff |
 | `values-v33/dd_launch.xml` | Android 13+ native icon-preference attribute |
 
-Edit these component-owned resources directly; no export step or ignored kit
+Edit these component-owned resources directly; no export step or design kit
 is needed. Keep adaptive and splash safe zones when replacing artwork, and
 verify an actual cold launch, warm activity creation and hot resume in addition
 to building the APK.
@@ -245,7 +246,7 @@ dimensions and motion values in typed Views resources. Alpha and animation
 scales also need typed scalar resources, not hardcoded UI literals. Reconcile
 the compatibility rules before importing values. If generated resources are
 introduced, their generator and inputs must be checked in with that component;
-update sources and outputs together without requiring the ignored design kit.
+update sources and outputs together without adding a build-time skill dependency.
 
 The host does not currently send authoritative `canUndo`/`canRedo` state. Keep
 existing actions usable rather than presenting guessed disabled states. Adding
@@ -274,7 +275,15 @@ the PNG, and review it at the displayed size. Keep these maximum widths:
 
 Commit updated images and their referencing documentation together. Any future
 reproducible image-generation workflow must include its required sources and
-tooling in the published component rather than reference the local workspace.
+tooling in the repository. To regenerate these six images from the checked-in
+skill masters, install Pillow in your development environment and run:
+
+```powershell
+python .\.github\skills\drawdock-brand-ui\scripts\export_docs.py
+python .\.github\skills\drawdock-brand-ui\scripts\export_docs.py --check
+```
+
+Normal documentation viewing and application builds do not run this generator.
 
 ## Review checklist
 
@@ -284,5 +293,5 @@ changes, run the existing tests/build/lint and check every menu page, large text
 TalkBack, pen/finger gestures, reduced motion and edge placement on the tablet.
 Retest rotated selection and USB/Wi-Fi source readiness when touching UI state.
 
-Record milestone approvals, validation results and pending acceptance in
-[`project-status`](../project-status/README.md), not in these technical guides.
+Include validation results and unavailable device checks in the relevant issue
+or pull request, not in these technical guides.

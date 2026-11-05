@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ system splash (androidx.core:core-splashscreen). Merge into the app theme; keep the app's existing parent theme. -->
+<resources>
+    <style name="Theme.DrawDock.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/dd_brand_navy</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/dd_splash_icon</item>
+        <item name="postSplashScreenTheme">@style/Theme.DrawDock</item> <!-- replace with the app's real theme -->
+    </style>
+</resources>

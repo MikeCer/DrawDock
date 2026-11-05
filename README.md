@@ -45,6 +45,6 @@ details.
 | [Pairing and security](docs/pairing-and-threat-model.md) | Authentication, storage and trust boundaries |
 | [Video streaming](docs/video-streaming.md) | Capture, encoding, decoding and ink handoff |
 
-Original design inputs live in [specs](specs/).
-Milestones, environment snapshots and validation/feasibility records live
-separately in [project-status](project-status/README.md).
+Original technical design inputs live in [specs](specs/); they can include
+proposals beyond the current Windows implementation. Linux adapters and QUIC
+are deferred, not supported configurations.

@@ -14,4 +14,5 @@ notices are included with the Windows runtime. DrawDock remains MIT-licensed.
 Verify downloads using SHA256SUMS.txt.
 
 This is a Windows-first PoC. Automated build/install checks are not proof of
-physical pen, projector or fullscreen behavior; see the project acceptance status.
+physical pen, projector or fullscreen behavior. Validate those on the intended
+hardware and presentation application. Linux adapters and QUIC remain deferred.

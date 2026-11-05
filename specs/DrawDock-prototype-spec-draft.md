@@ -2,8 +2,9 @@
 
 Version: 0.1 — review draft, not approved for implementation  
 Research date: 2026-11-04  
-Owner/reviewer: Mike Cerreto  
 Status: proposed architecture; platform feasibility gates remain open
+
+This baseline includes future cross-platform work. See [the contributor documentation](../docs/README.md) for current behavior; Linux adapters and QUIC remain deferred.
 
 ## 1. Purpose and authority
 

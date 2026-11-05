@@ -36,6 +36,5 @@ and capture geometry. Physical-output, fullscreen, pen and transport checks are
 independent test dimensions; compilation is not a substitute for visual/input
 testing.
 
-The [Windows-first profile](../../specs/DrawDock-windows-first-poc-profile.md)
-records the original requirement context. The
+Linux adapters and QUIC are deferred. The
 [architecture guide](../architecture.md) describes the component implementation.

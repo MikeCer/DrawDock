@@ -30,13 +30,14 @@ Do not commit `android\local.properties`, credentials or machine-specific paths.
 | `docs` | Contributor-facing technical documentation |
 | `docs\assets\brand` | Self-contained documentation images |
 | `specs` | Original design and requirement inputs |
-| `project-status` | Milestones, environment snapshots and validation reports |
+| `.github\skills` | Repository-scoped Copilot skills and their supporting assets |
 
 The [architecture guide](architecture.md) maps individual source files.
 The technical guides describe implementation behavior; design inputs can contain
 broader proposals that are not part of the executable contract.
-The optional root `brand` design workspace is ignored; contributor builds and
-documentation must not depend on it. See [asset ownership](branding.md).
+Application builds use component-owned resources; the optional Copilot
+[branding skill](../.github/skills/drawdock-brand-ui/SKILL.md) contains design
+sources and generators. See [asset ownership](branding.md).
 
 ## Rust build and checks
 
@@ -147,9 +148,11 @@ pointer release, palm/finger exclusion, mode/source changes and video alignment.
 For clipboard changes, test actual image providers and denied access. For video
 changes, distinguish encoder throughput from end-to-end input/display latency.
 
-Record configurations, commands and observations in
-[project records](../project-status/README.md), not in technical guide prose.
-Do not save secrets or sensitive desktop recordings as evidence.
+Include the tested configuration, commands and observations in the relevant
+issue or pull request. Mark unavailable hardware checks as NOT RUN; compilation
+does not prove physical pen, fullscreen or projector behavior.
+Keep local reports out of version control and do not publish secrets or
+sensitive desktop recordings as evidence.
 
 ## Contribution checklist
 
