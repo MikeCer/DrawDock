@@ -182,4 +182,3 @@ when video/source readiness is lost.
 - [Protocol](protocol.md) for wire and ordering rules.
 - [Features](features.md) for gesture and editing semantics.
 - [Pairing and threat model](pairing-and-threat-model.md) for trust boundaries.
-- [ADR 0001](adr/0001-windows-first-poc.md) for the platform decision.
