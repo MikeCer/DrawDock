@@ -134,8 +134,8 @@ to milestone 4. No automatic commit was made.
 
 ## Milestone 4: adaptive launcher and system splash (2026-11-05)
 
-**Implemented, installed and verified on the API 36 tablet. Stopped for owner
-visual review and optional commit; API 30 runtime rendering remains unverified.**
+**Committed by the owner as `aa523cb`. Rebuilt and device-verified after the PC
+crash; API 30 runtime rendering remains unverified.**
 
 - Added the adaptive icon to both manifest launcher declarations, using five
   original density PNGs and the supplied light background.
@@ -184,12 +184,30 @@ No system-wide settings, firewall rules or stored pairing were changed.
 No automatic commit was made. Existing physical-pen/fullscreen/projector
 acceptance gaps are unchanged; Linux and QUIC remain DEFERRED.
 
+### Post-crash resumption (2026-11-05)
+
+Confirmed that all four milestones survived in Git and the previous device
+evidence remained intact. A fresh `testDebugUnitTest assembleDebug lintDebug`
+completed successfully: 34 tests, zero failures/errors, zero lint errors and
+59 warnings. Reinstalled the rebuilt APK without clearing application data.
+
+On the connected API 36 tablet, repeated the actual launcher-tile cold start,
+warm activity creation and hot resume. Both creation paths show a single branded
+splash and usable app controls afterward; hot resume shows no new splash.
+The scoped app log contains no fatal exception. Header/settings/Pen tools,
+pairing/manual-field validation and cancellable Forget/Text/Clear dialogs pass.
+Remembered pairing and tablet-wide settings were not changed.
+
+No implementation repair was required. The API 30 runtime and optional
+monochrome-artwork limitations remain as recorded above. Stopped for owner
+visual review without creating a commit.
+
 ## Owner-gated milestone plan
 
 | Milestone | Scope | Gate |
 |---|---|---|
 | 2 | Android Views radial-menu tokens, icons and visual states | Committed by owner as `84bbbd2` with milestone 3 |
 | 3 | Header/settings and dialogs; preserve canvas rendering | Committed by owner as `84bbbd2`; owner approved milestone 4 |
-| 4 | Adaptive launcher and API-compatible system splash | Implemented and device-verified on API 36; stopped for owner review/commit, API 30 runtime unverified |
+| 4 | Adaptive launcher and API-compatible system splash | Owner committed `aa523cb`; post-crash rebuild/device checks pass on API 36; API 30 runtime unverified |
 
 Do not roll these milestones into one change or create commits automatically.
