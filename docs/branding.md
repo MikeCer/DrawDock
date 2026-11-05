@@ -90,6 +90,88 @@ This selection reference illustrates contrast, not the approved dimensions.
 Do not copy its 1.5 dp dashed perimeter, 40 dp hit targets, reduced handles,
 green-black background or grid spacing into the application.
 
+## Android radial menu implementation
+
+`RadialMenuView` keeps native accessible `Button` children, with vector icons,
+labels, pressed/hover/focus feedback and an icon-backed Close/Back button.
+`MainActivity` maps every action to its icon and supplies current application
+state. The selected tool has a cyan disc; selected swatches have a ring and
+check mark. Width previews use the actual 3/6/12 dp width and current ink color.
+The root indicates the active tool family and current color.
+
+Blackboard/Grid use acknowledged host state for cyan styling, an ON badge and
+an accessibility state description. Their labels still describe the action
+(ON to enable, OFF to disable). More shows the target Draw/Pointer mode, and
+Clear all uses danger styling while retaining its confirmation dialog.
+Visible pages refresh after editor acknowledgements. Undo/Redo and path actions
+remain available with their existing validation; there are no guessed
+disabled states.
+
+The preferred disc remains 350 dp, not the smaller design-reference disc.
+Buttons are at least 66 dp and expand to fit scaled text. Geometry reserves
+space for nonoverlapping square targets and an 8 dp workspace margin, shifting
+the anchor away from edges. If the full menu cannot fit, a scrollable list
+keeps the same item order/actions and Close/Back without shrinking labels or
+targets. Transitions remain immediate, including with system animations
+disabled; no animation can delay input cancellation or a queued action.
+
+The Android-owned sources are:
+
+| Source | Responsibility |
+|---|---|
+| `android/app/src/main/res/drawable/ic_dd_*.xml` | Menu vector sources, tinted at use sites and cached per menu page |
+| `android/app/src/main/res/values/dd_menu_colors.xml` | Menu surfaces, text, state accents and danger styling |
+| `android/app/src/main/res/values/dd_menu_dimens.xml` | Menu dimensions, scaled label sizes and width previews |
+| `RadialMenuGeometry.kt` / `RadialMenuGeometryTest.kt` | Edge placement, nonoverlapping targets and small-window fallback decisions |
+
+Edit these sources directly. They are not generated from the ignored kit.
+No new runtime dependency, Compose migration or external graphics path is
+required. Annotation palette, host scene rendering, selection handles and
+canvas gesture handling remain independent of menu styling.
+
+## App chrome and dialogs
+
+`Theme.DrawDock` is a native Views theme with the same navy surfaces, cyan
+accents and light text as the menu. It does not require AppCompat, Compose or
+Material Components. System-bar foreground colors follow the dark app surface;
+the captured desktop and native Windows overlay are not recolored.
+
+The header uses labeled Pen tools and Settings buttons plus a monitor dropdown.
+The selector's adapter keeps the original source list and selection callbacks,
+with component-owned selected-row/popup layouts. Its disabled text and native
+enabled state reflect the existing source-readiness barrier. The dropdown
+uses the platform arrow tinted cyan rather than an invented brand icon.
+
+The connection panel uses a raised rounded surface, primary Connect/Disconnect
+button and outlined pairing/forget actions. Buttons retain at least 48 dp
+targets, scaled labels and pressed/hover/keyboard-focus feedback. Settings
+remains scrollable and does not reserve permanent canvas space. Connection
+icons follow the existing connection state; no transport/authentication behavior
+is inferred from styling.
+
+`Theme.DrawDock.Dialog` and `showBranded` style the pairing chooser, manual
+invitation, scanned-PC confirmation, text entry, Forget and Clear dialogs.
+Positive actions use cyan; destructive confirmations keep danger-colored
+text and their existing confirmation/cancellation handlers. Manual invitation
+fields have persistent labels and accessible descriptions; fields and long
+content remain scrollable. Camera permission and other operating-system dialogs
+remain system-controlled.
+
+Additional Android-owned sources:
+
+| Source | Responsibility |
+|---|---|
+| `values/dd_ui_colors.xml`, `dd_ui_dimens.xml`, `dd_ui_styles.xml` | Shared chrome/dialog tokens and native widget themes |
+| `color/dd_ui_control_text.xml` | Enabled/disabled control text |
+| `drawable/dd_button*_background.xml`, `dd_field_background.xml`, `dd_panel_background.xml` | Rounded surfaces and interaction states |
+| `layout/dd_spinner_selected.xml`, `dd_spinner_option.xml` | Monitor selector and popup rows |
+| `drawable/ic_dd_pen_tools.xml`, `ic_dd_monitor_select.xml`, `ic_dd_connected.xml`, `ic_dd_disconnected.xml` | Four header/connection vectors in addition to the 38 menu vectors |
+
+These paths are relative to `android/app/src/main/res`. The app manifest selects
+the native theme. Pair/Forget retain readable text labels because the supplied
+icon map has no dedicated icons for those actions. Launcher/splash artwork is
+independent of this control styling.
+
 ## Android integration boundaries
 
 Use the existing Kotlin Views/custom Canvas implementation; a Compose migration

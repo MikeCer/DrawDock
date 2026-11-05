@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.DrawDock" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">@color/dd_ui_accent</item>
+        <item name="android:colorBackground">@color/dd_ui_background</item>
+        <item name="android:windowBackground">@color/dd_ui_background</item>
+        <item name="android:textColorPrimary">@color/dd_ui_text</item>
+        <item name="android:textColorSecondary">@color/dd_ui_muted</item>
+        <item name="android:textColorHint">@color/dd_ui_muted</item>
+        <item name="android:colorControlNormal">@color/dd_ui_muted</item>
+        <item name="android:colorControlActivated">@color/dd_ui_accent</item>
+        <item name="android:buttonStyle">@style/Widget.DrawDock.Button</item>
+        <item name="android:editTextStyle">@style/Widget.DrawDock.EditText</item>
+        <item name="android:alertDialogTheme">@style/Theme.DrawDock.Dialog</item>
+        <item name="android:statusBarColor">@color/dd_ui_background</item>
+        <item name="android:navigationBarColor">@color/dd_ui_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+    <style name="Theme.DrawDock.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">@color/dd_ui_accent</item>
+        <item name="android:colorBackground">@color/dd_ui_surface</item>
+        <item name="android:windowBackground">@drawable/dd_panel_background</item>
+        <item name="android:textColorPrimary">@color/dd_ui_text</item>
+        <item name="android:textColorSecondary">@color/dd_ui_muted</item>
+        <item name="android:textColorHint">@color/dd_ui_muted</item>
+        <item name="android:buttonStyle">@style/Widget.DrawDock.Button</item>
+        <item name="android:buttonBarButtonStyle">@style/Widget.DrawDock.Button</item>
+        <item name="android:editTextStyle">@style/Widget.DrawDock.EditText</item>
+    </style>
+    <style name="Widget.DrawDock.Button" parent="android:style/Widget.Material.Button">
+        <item name="android:background">@drawable/dd_button_background</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:textColor">@color/dd_ui_control_text</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">@dimen/dd_ui_label</item>
+        <item name="android:minHeight">@dimen/dd_ui_target</item>
+        <item name="android:minWidth">@dimen/dd_ui_target</item>
+        <item name="android:paddingLeft">@dimen/dd_ui_padding</item>
+        <item name="android:paddingRight">@dimen/dd_ui_padding</item>
+        <item name="android:paddingTop">@dimen/dd_ui_space</item>
+        <item name="android:paddingBottom">@dimen/dd_ui_space</item>
+        <item name="android:drawablePadding">@dimen/dd_ui_space</item>
+    </style>
+    <style name="Widget.DrawDock.Button.Primary" parent="Widget.DrawDock.Button">
+        <item name="android:background">@drawable/dd_button_primary_background</item>
+        <item name="android:textColor">@color/dd_ui_on_accent</item>
+    </style>
+    <style name="Widget.DrawDock.EditText" parent="android:style/Widget.Material.EditText">
+        <item name="android:background">@drawable/dd_field_background</item>
+        <item name="android:backgroundTint">@null</item>
+        <item name="android:textColor">@color/dd_ui_text</item>
+        <item name="android:textColorHint">@color/dd_ui_muted</item>
+        <item name="android:textSize">@dimen/dd_ui_body</item>
+        <item name="android:minHeight">@dimen/dd_ui_target</item>
+        <item name="android:padding">@dimen/dd_ui_field_padding</item>
+    </style>
+</resources>

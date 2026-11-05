@@ -5,7 +5,7 @@
     <application
         android:allowBackup="false"
         android:label="DrawDock"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.DrawDock">
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize"

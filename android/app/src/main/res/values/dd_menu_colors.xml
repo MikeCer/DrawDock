@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="dd_menu_surface">#F00B1B3A</color>
+    <color name="dd_menu_rim">#5922D3EE</color>
+    <color name="dd_menu_divider">#1FE6F0FF</color>
+    <color name="dd_menu_text">#FFE6F0FF</color>
+    <color name="dd_menu_accent">#FF22D3EE</color>
+    <color name="dd_menu_on_accent">#FF0B1B3A</color>
+    <color name="dd_menu_center">#FF13284F</color>
+    <color name="dd_menu_pressed">#3822D3EE</color>
+    <color name="dd_menu_hover">#2422D3EE</color>
+    <color name="dd_menu_danger">#FFFF5470</color>
+    <color name="dd_menu_swatch_outline">#FF8FA3C4</color>
+</resources>

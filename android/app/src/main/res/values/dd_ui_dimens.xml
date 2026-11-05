@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="dd_ui_target">48dp</dimen>
+    <dimen name="dd_ui_option_height">56dp</dimen>
+    <dimen name="dd_ui_space">8dp</dimen>
+    <dimen name="dd_ui_padding">16dp</dimen>
+    <dimen name="dd_ui_field_padding">12dp</dimen>
+    <dimen name="dd_ui_stroke">1dp</dimen>
+    <dimen name="dd_ui_radius">12dp</dimen>
+    <dimen name="dd_ui_icon">24dp</dimen>
+    <dimen name="dd_ui_label">14sp</dimen>
+    <dimen name="dd_ui_body">16sp</dimen>
+    <dimen name="dd_ui_title">18sp</dimen>
+    <dimen name="dd_ui_panel_height">240dp</dimen>
+    <dimen name="dd_ui_elevation">8dp</dimen>
+</resources>

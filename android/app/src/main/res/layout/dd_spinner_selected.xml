@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="@dimen/dd_ui_target"
+    android:gravity="center_vertical"
+    android:padding="@dimen/dd_ui_field_padding"
+    android:textSize="@dimen/dd_ui_label"
+    android:textColor="@color/dd_ui_control_text"
+    android:duplicateParentState="true"
+    android:maxLines="2"
+    android:ellipsize="end"
+    android:drawableStart="@drawable/ic_dd_monitor_select"
+    android:drawableEnd="@android:drawable/arrow_down_float"
+    android:drawablePadding="@dimen/dd_ui_space"
+    android:drawableTint="@color/dd_ui_accent" />

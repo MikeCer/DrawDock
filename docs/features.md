@@ -11,6 +11,11 @@ The menu is anchored near the contact and clamped inside the workspace.
 Finger holds do not open it. **Pen tools** in the header is an accessible fallback.
 The center button closes the root or returns from a submenu.
 
+Menu items have labeled icons and indicate the selected tool, color, width
+and acknowledged Blackboard/Grid state. Targets grow with text size; when a
+radial layout cannot fit the workspace, the same actions appear in a scrollable
+list rather than shrinking pen targets.
+
 The hold gesture cancels provisional ink rather than committing a dot. Movement
 beyond slop disarms it. In Pointer mode, mouse-down waits until a drag or short
 tap is recognized, preventing a long-press menu from clicking the desktop.

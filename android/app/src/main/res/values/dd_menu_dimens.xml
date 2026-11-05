@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="dd_menu_diameter">350dp</dimen>
+    <dimen name="dd_menu_target">66dp</dimen>
+    <dimen name="dd_menu_edge_margin">8dp</dimen>
+    <dimen name="dd_menu_item_padding">4dp</dimen>
+    <dimen name="dd_menu_label_gap">2dp</dimen>
+    <dimen name="dd_menu_label">11sp</dimen>
+    <dimen name="dd_menu_icon">24dp</dimen>
+    <dimen name="dd_menu_preview">42dp</dimen>
+    <dimen name="dd_menu_selected_disc">34dp</dimen>
+    <dimen name="dd_menu_active_dot">5dp</dimen>
+    <dimen name="dd_menu_rim_width">1dp</dimen>
+    <dimen name="dd_menu_selected_ring">3dp</dimen>
+    <dimen name="dd_menu_swatch_outline_width">1.5dp</dimen>
+    <dimen name="dd_menu_check_width">2dp</dimen>
+    <dimen name="dd_menu_toggle_label">6.5sp</dimen>
+    <dimen name="dd_menu_toggle_width">16dp</dimen>
+    <dimen name="dd_menu_toggle_height">10dp</dimen>
+    <dimen name="dd_menu_swatch">26dp</dimen>
+    <dimen name="dd_menu_width_preview">22dp</dimen>
+    <dimen name="dd_menu_width_thin">3dp</dimen>
+    <dimen name="dd_menu_width_medium">6dp</dimen>
+    <dimen name="dd_menu_width_thick">12dp</dimen>
+    <dimen name="dd_menu_elevation">24dp</dimen>
+</resources>

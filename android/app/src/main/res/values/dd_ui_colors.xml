@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="dd_ui_background">@color/dd_menu_on_accent</color>
+    <color name="dd_ui_surface">@color/dd_menu_center</color>
+    <color name="dd_ui_raised">#FF1C3566</color>
+    <color name="dd_ui_text">@color/dd_menu_text</color>
+    <color name="dd_ui_muted">#FF8FA3C4</color>
+    <color name="dd_ui_accent">@color/dd_menu_accent</color>
+    <color name="dd_ui_on_accent">@color/dd_menu_on_accent</color>
+    <color name="dd_ui_primary_pressed">#FF67E8F9</color>
+    <color name="dd_ui_outline">@color/dd_menu_rim</color>
+    <color name="dd_ui_danger">@color/dd_menu_danger</color>
+</resources>

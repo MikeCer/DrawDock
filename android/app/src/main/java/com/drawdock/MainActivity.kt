@@ -23,6 +23,7 @@ import android.widget.AdapterView
 import android.widget.HorizontalScrollView
 import android.text.InputType
 import android.text.InputFilter
+import android.util.TypedValue
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import com.journeyapps.barcodescanner.ScanContract
@@ -44,6 +45,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var toolsMenu: ScrollView
     private lateinit var menuButton: Button
     private lateinit var radialMenu: RadialMenuView
+    private var refreshRadialPage: (() -> Unit)? = null
     private var blackboard = false
     private var grid = false
     private var pendingEditorRequestId: Long? = null
@@ -75,7 +77,7 @@ class MainActivity : ComponentActivity() {
         inputView = InkInputView(this)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(0xFFF4F4F4.toInt())
+            setBackgroundColor(getColor(R.color.dd_ui_background))
             setOnApplyWindowInsetsListener { view, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars())
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
@@ -85,20 +87,25 @@ class MainActivity : ComponentActivity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            val padding = uiSize(R.dimen.dd_ui_space)
+            setPadding(padding, padding, padding, padding)
+            setBackgroundColor(getColor(R.color.dd_ui_background))
         }
-        screenSelector = Spinner(this).apply {
+        screenSelector = Spinner(this, Spinner.MODE_DROPDOWN).apply {
             contentDescription = "PC screen to mirror"
             isEnabled = false
+            background = getDrawable(R.drawable.dd_field_background)
+            setPopupBackgroundDrawable(getDrawable(R.drawable.dd_panel_background))
+            dropDownVerticalOffset = uiSize(R.dimen.dd_ui_space)
         }
-        screenSelector.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item,
-            listOf("Connect to select a PC screen"))
+        screenSelector.adapter = screenAdapter(listOf("Connect to select a PC screen"))
         header.addView(screenSelector, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        menuButton = button("Hide settings") {
+        menuButton = button("Hide settings", R.drawable.ic_dd_settings) {
             val show = toolsMenu.visibility != View.VISIBLE
             toolsMenu.visibility = if (show) View.VISIBLE else View.GONE
             text = if (show) "Hide settings" else "Settings"
         }
-        header.addView(button("Pen tools") {
+        header.addView(button("Pen tools", R.drawable.ic_dd_pen_tools) {
             inputView.cancelActiveContact(keepPath = true)
             showRadialMenu(workspace.width / 2f, workspace.height / 2f)
         })
@@ -156,20 +163,18 @@ class MainActivity : ComponentActivity() {
 
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(8, 8, 8, 8)
-            setBackgroundColor(0xEEF4F4F4.toInt())
+            val padding = uiSize(R.dimen.dd_ui_padding)
+            setPadding(padding, padding, padding, padding)
+            background = getDrawable(R.drawable.dd_panel_background)
             isClickable = true
         }
+        controls.addView(uiLabel("Connection", R.dimen.dd_ui_title))
         val topRow = row(controls)
-        connectionButton = button("Connect") {
+        connectionButton = button("Connect", R.drawable.ic_dd_disconnected, primary = true) {
             if (sessionClient == null) connectRememberedOrPair() else disconnectSession()
         }.also(topRow::addView)
 
-        statusText = TextView(this).apply {
-            text = "Not connected; tablet preview alone is not PC annotation."
-            setTextColor(Color.DKGRAY)
-            textSize = 12f
-        }
+        statusText = uiLabel("Not connected; tablet preview alone is not PC annotation.")
         val pairingRow = row(controls)
         button("Pair another PC") {
             disconnectSession()
@@ -177,7 +182,10 @@ class MainActivity : ComponentActivity() {
         }.also(pairingRow::addView)
         button("Forget PC") { forgetRememberedHost() }.also(pairingRow::addView)
         controls.addView(statusText)
-        toolsMenu = ScrollView(this).apply { addView(controls); elevation = 8f }
+        toolsMenu = ScrollView(this).apply {
+            addView(controls)
+            elevation = resources.getDimension(R.dimen.dd_ui_elevation)
+        }
         workspace.addView(toolsMenu, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         radialMenu = RadialMenuView(this)
         workspace.addView(radialMenu, FrameLayout.LayoutParams(-1, -1))
@@ -240,86 +248,131 @@ class MainActivity : ComponentActivity() {
         radialRoot()
     }
 
-    private fun radialAction(label: String, action: () -> Unit) =
-        RadialMenuView.Item(label) { radialMenu.dismiss(); action() }
+    private fun radialAction(
+        label: String, icon: Int, description: String = label.replace('\n', ' '), action: () -> Unit,
+    ) = RadialMenuView.Item(label, icon, description) { radialMenu.dismiss(); action() }
 
     private fun radialRoot() {
+        refreshRadialPage = ::radialRoot
         radialMenu.page(listOf(
-            RadialMenuView.Item("Pen") { penPage() },
-            RadialMenuView.Item("Shapes") { shapesPage() },
-            RadialMenuView.Item("Select /\nEdit") { editPage() },
-            RadialMenuView.Item("Style") { stylePage() },
-            RadialMenuView.Item("Board /\nGrid") { canvasPage() },
-            radialAction("Undo") { history(false) },
-            radialAction("Redo") { history(true) },
-            RadialMenuView.Item("More") { morePage() },
+            RadialMenuView.Item("Pen", R.drawable.ic_dd_pen,
+                activeFamily = selectedTool in listOf(DrawTool.FREEHAND, DrawTool.HIGHLIGHTER, DrawTool.LASER)) { penPage() },
+            RadialMenuView.Item("Shapes", R.drawable.ic_dd_shapes,
+                activeFamily = selectedTool in listOf(DrawTool.RECTANGLE, DrawTool.CIRCLE, DrawTool.ELLIPSE,
+                    DrawTool.LINE, DrawTool.POLYGON, DrawTool.POLYLINE, DrawTool.ARROW, DrawTool.TEXT)) { shapesPage() },
+            RadialMenuView.Item("Select /\nEdit", R.drawable.ic_dd_select_edit,
+                activeFamily = selectedTool in listOf(DrawTool.SELECT_MOVE, DrawTool.ROTATE, DrawTool.RESIZE)) { editPage() },
+            RadialMenuView.Item("Style", R.drawable.ic_dd_style, previewColor = selectedColor) { stylePage() },
+            RadialMenuView.Item("Board /\nGrid", R.drawable.ic_dd_board_grid) { canvasPage() },
+            radialAction("Undo", R.drawable.ic_dd_undo) { history(false) },
+            radialAction("Redo", R.drawable.ic_dd_redo) { history(true) },
+            RadialMenuView.Item("More", R.drawable.ic_dd_more) { morePage() },
         ))
     }
 
-    private fun toolItem(label: String, tool: DrawTool) = radialAction(label) { pickTool(tool) }
+    private fun toolItem(label: String, tool: DrawTool, icon: Int, description: String = label.replace('\n', ' ')) =
+        radialAction(label, icon, description) { pickTool(tool) }.copy(selected = selectedTool == tool)
 
     private fun penPage() {
-        radialMenu.page(listOf(toolItem("Free", DrawTool.FREEHAND),
-            toolItem("High-\nlighter", DrawTool.HIGHLIGHTER), toolItem("Laser", DrawTool.LASER)), ::radialRoot)
+        refreshRadialPage = ::penPage
+        radialMenu.page(listOf(
+            toolItem("Free", DrawTool.FREEHAND, R.drawable.ic_dd_freehand, "Freehand pen"),
+            toolItem("High-\nlighter", DrawTool.HIGHLIGHTER, R.drawable.ic_dd_highlighter, "Highlighter"),
+            toolItem("Laser", DrawTool.LASER, R.drawable.ic_dd_laser_pointer, "Laser pointer"),
+        ), ::radialRoot)
     }
 
     private fun shapesPage() {
+        refreshRadialPage = ::shapesPage
         radialMenu.page(listOf(
-            toolItem("Rectangle", DrawTool.RECTANGLE), toolItem("Circle", DrawTool.CIRCLE),
-            toolItem("Ellipse", DrawTool.ELLIPSE), toolItem("Line", DrawTool.LINE),
-            toolItem("Polygon", DrawTool.POLYGON), toolItem("Polyline", DrawTool.POLYLINE),
-            toolItem("Arrow", DrawTool.ARROW), toolItem("Text", DrawTool.TEXT),
+            toolItem("Rectangle", DrawTool.RECTANGLE, R.drawable.ic_dd_rectangle),
+            toolItem("Circle", DrawTool.CIRCLE, R.drawable.ic_dd_circle),
+            toolItem("Ellipse", DrawTool.ELLIPSE, R.drawable.ic_dd_ellipse),
+            toolItem("Line", DrawTool.LINE, R.drawable.ic_dd_line, "Straight line"),
+            toolItem("Polygon", DrawTool.POLYGON, R.drawable.ic_dd_polygon, "Polygon (closed path)"),
+            toolItem("Polyline", DrawTool.POLYLINE, R.drawable.ic_dd_polyline, "Polyline (open path)"),
+            toolItem("Arrow", DrawTool.ARROW, R.drawable.ic_dd_arrow),
+            toolItem("Text", DrawTool.TEXT, R.drawable.ic_dd_text),
         ), ::radialRoot)
     }
 
     private fun editPage() {
+        refreshRadialPage = ::editPage
         radialMenu.page(listOf(
-            toolItem("Select /\nMove", DrawTool.SELECT_MOVE), toolItem("Rotate", DrawTool.ROTATE),
-            toolItem("Resize", DrawTool.RESIZE),
-            radialAction("Mirror\nH") { mirror(true) }, radialAction("Mirror\nV") { mirror(false) },
-            radialAction("Deselect") { inputView.selection = null },
+            toolItem("Select /\nMove", DrawTool.SELECT_MOVE, R.drawable.ic_dd_select_move, "Select and move"),
+            toolItem("Rotate", DrawTool.ROTATE, R.drawable.ic_dd_rotate, "Rotate selection"),
+            toolItem("Resize", DrawTool.RESIZE, R.drawable.ic_dd_resize, "Resize selection"),
+            radialAction("Mirror\nH", R.drawable.ic_dd_mirror_horizontal, "Mirror horizontally") { mirror(true) },
+            radialAction("Mirror\nV", R.drawable.ic_dd_mirror_vertical, "Mirror vertically") { mirror(false) },
+            radialAction("Deselect", R.drawable.ic_dd_deselect) { inputView.selection = null },
         ), ::radialRoot)
     }
 
     private fun stylePage() {
+        refreshRadialPage = ::stylePage
         radialMenu.page(listOf(
-            RadialMenuView.Item("Color") {
-                radialMenu.page(listOf("Red" to Color.RED, "Orange" to 0xFFFF9800.toInt(),
-                    "Yellow" to Color.YELLOW, "Green" to Color.GREEN, "Blue" to Color.BLUE,
-                    "Black" to Color.BLACK, "White" to Color.WHITE).map { (label, color) ->
-                    radialAction(label) { selectedColor = color; configureInput() }
-                }, ::stylePage)
-            },
-            RadialMenuView.Item("Width") {
-                radialMenu.page(listOf("Thin" to 3f, "Medium" to 6f, "Thick" to 12f).map { (label, width) ->
-                    radialAction(label) {
-                        selectedWidth = width * resources.displayMetrics.density
-                        configureInput()
-                    }
-                }, ::stylePage)
-            },
+            RadialMenuView.Item("Color", R.drawable.ic_dd_color, previewColor = selectedColor) { colorPage() },
+            RadialMenuView.Item("Width", R.drawable.ic_dd_width) { widthPage() },
         ), ::radialRoot)
     }
 
-    private fun canvasPage() {
+    private fun colorPage() {
+        refreshRadialPage = ::colorPage
+        radialMenu.page(listOf("Red" to Color.RED, "Orange" to 0xFFFF9800.toInt(),
+            "Yellow" to Color.YELLOW, "Green" to Color.GREEN, "Blue" to Color.BLUE,
+            "Black" to Color.BLACK, "White" to Color.WHITE).map { (label, color) ->
+            radialAction(label, R.drawable.ic_dd_color, "$label ink") {
+                selectedColor = color
+                configureInput()
+            }.copy(swatch = color, selected = selectedColor == color)
+        }, ::stylePage)
+    }
+
+    private fun widthPage() {
+        refreshRadialPage = ::widthPage
         radialMenu.page(listOf(
-            radialAction(if (blackboard) "Blackboard\nOFF" else "Blackboard\nON") {
+            Triple("Thin", R.dimen.dd_menu_width_thin, "3 dp"),
+            Triple("Medium", R.dimen.dd_menu_width_medium, "6 dp"),
+            Triple("Thick", R.dimen.dd_menu_width_thick, "12 dp"),
+        ).map { (label, resource, description) ->
+            val width = resources.getDimension(resource)
+            radialAction(label, R.drawable.ic_dd_width, "$label, $description") {
+                selectedWidth = width
+                configureInput()
+            }.copy(strokeWidth = width, previewColor = selectedColor, selected = selectedWidth == width)
+        }, ::stylePage)
+    }
+
+    private fun canvasPage() {
+        refreshRadialPage = ::canvasPage
+        radialMenu.page(listOf(
+            radialAction(if (blackboard) "Blackboard\nOFF" else "Blackboard\nON", R.drawable.ic_dd_blackboard,
+                if (blackboard) "Turn Blackboard off" else "Turn Blackboard on") {
                 sendEditor(JSONObject().put("type", "set_canvas").put("blackboard", !blackboard).put("grid", grid))
-            },
-            radialAction(if (grid) "Grid OFF" else "Grid ON") {
+            }.copy(toggleOn = blackboard),
+            radialAction(if (grid) "Grid OFF" else "Grid ON", R.drawable.ic_dd_grid,
+                if (grid) "Turn Grid off" else "Turn Grid on") {
                 sendEditor(JSONObject().put("type", "set_canvas").put("blackboard", blackboard).put("grid", !grid))
-            },
+            }.copy(toggleOn = grid),
         ), ::radialRoot)
     }
 
     private fun morePage() {
+        refreshRadialPage = ::morePage
         radialMenu.page(listOf(
-            radialAction(if (inputView.drawMode) "Pointer\nmode" else "Draw\nmode") { requestModeChange() },
-            radialAction("Finish\npath") { inputView.finishPath() },
-            radialAction("Cancel\npath") { inputView.cancelActiveContact() },
-            radialAction("Paste\nimage") { pasteClipboardImage() },
-            radialAction("Clear\nall") { confirmRemoteClear() },
-            radialAction("Settings") { toolsMenu.visibility = View.VISIBLE; menuButton.text = "Hide settings" },
+            radialAction(if (inputView.drawMode) "Pointer\nmode" else "Draw\nmode",
+                if (inputView.drawMode) R.drawable.ic_dd_mode_pointer else R.drawable.ic_dd_mode_draw,
+                if (inputView.drawMode) "Switch to pointer mode" else "Switch to draw mode") { requestModeChange() },
+            radialAction("Finish\npath", R.drawable.ic_dd_finish_path, "Finish polygon or polyline") { inputView.finishPath() },
+            radialAction("Cancel\npath", R.drawable.ic_dd_cancel_path, "Cancel polygon or polyline") { inputView.cancelActiveContact() },
+            radialAction("Paste\nimage", R.drawable.ic_dd_paste_image, "Paste image from tablet clipboard") { pasteClipboardImage() },
+            radialAction("Clear\nall", R.drawable.ic_dd_clear_all, "Clear all annotations on tablet and PC") {
+                confirmRemoteClear()
+            }.copy(danger = true),
+            radialAction("Settings", R.drawable.ic_dd_settings, "Connection settings") {
+                toolsMenu.visibility = View.VISIBLE
+                menuButton.text = "Hide settings"
+            },
         ), ::radialRoot)
     }
 
@@ -417,6 +470,7 @@ class MainActivity : ComponentActivity() {
             statusText.text = if (inputView.selection == null) "No object selected; long-press for tools."
                 else "Drag to move; drag a corner to resize or the curved-arrow handle to rotate."
         }
+        if (radialMenu.visibility == View.VISIBLE) refreshRadialPage?.invoke()
         refreshInputReady()
     }
 
@@ -434,7 +488,12 @@ class MainActivity : ComponentActivity() {
             selectedWidth >= 12f * resources.displayMetrics.density -> 0.05f
             else -> 0.035f
         }
-        android.app.AlertDialog.Builder(this).setTitle("Place text").setView(field)
+        val content = ScrollView(this).apply {
+            val padding = uiSize(R.dimen.dd_ui_padding)
+            setPadding(padding, padding, padding, padding)
+            addView(field)
+        }
+        android.app.AlertDialog.Builder(this).setTitle("Place text").setView(content)
             .setNegativeButton("Cancel", null).setPositiveButton("Place") { _, _ ->
                 val text = field.text.toString()
                 if (text.isBlank()) { notifyDrawing("Text cannot be empty."); return@setPositiveButton }
@@ -445,7 +504,7 @@ class MainActivity : ComponentActivity() {
                     return@setPositiveButton
                 }
                 inputView.addText(x, y, text, fontSize)
-            }.show()
+            }.showBranded()
     }
 
     private fun pasteClipboardImage() {
@@ -514,7 +573,7 @@ class MainActivity : ComponentActivity() {
                 view.layoutParams = FrameLayout.LayoutParams(fit.width, fit.height, Gravity.CENTER)
             }
         }
-        val menuHeight = minOf((240 * resources.displayMetrics.density).toInt(), workspace.height / 2)
+        val menuHeight = minOf(uiSize(R.dimen.dd_ui_panel_height), workspace.height / 2)
         if (toolsMenu.layoutParams.height != menuHeight) {
             toolsMenu.layoutParams = FrameLayout.LayoutParams(-1, menuHeight, Gravity.TOP)
         }
@@ -590,15 +649,55 @@ class MainActivity : ComponentActivity() {
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-            ),
+            ).apply { topMargin = uiSize(R.dimen.dd_ui_space); bottomMargin = uiSize(R.dimen.dd_ui_space) },
         )
     }
 
-    private fun button(label: String, onClick: Button.() -> Unit) =
-        Button(this).apply {
+    private fun uiSize(resource: Int) = resources.getDimensionPixelSize(resource)
+
+    private fun uiLabel(label: String, size: Int = R.dimen.dd_ui_label) = TextView(this).apply {
+        text = label
+        setTextSize(TypedValue.COMPLEX_UNIT_PX, resources.getDimension(size))
+        setTextColor(getColor(R.color.dd_ui_text))
+    }
+
+    private fun screenAdapter(labels: List<String>) =
+        ArrayAdapter(this, R.layout.dd_spinner_selected, labels).apply {
+            setDropDownViewResource(R.layout.dd_spinner_option)
+        }
+
+    private fun buttonIcon(button: Button, icon: Int, primary: Boolean = false) {
+        val drawable = requireNotNull(getDrawable(icon)).mutate().apply {
+            setTint(getColor(if (primary) R.color.dd_ui_on_accent else R.color.dd_ui_accent))
+            val size = uiSize(R.dimen.dd_ui_icon)
+            setBounds(0, 0, size, size)
+        }
+        button.setCompoundDrawablesRelative(drawable, null, null, null)
+    }
+
+    private fun button(label: String, icon: Int? = null, primary: Boolean = false, onClick: Button.() -> Unit) =
+        Button(this, null, 0, if (primary) R.style.Widget_DrawDock_Button_Primary else R.style.Widget_DrawDock_Button).apply {
             text = label
             isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(-2, -2).apply {
+                marginStart = uiSize(R.dimen.dd_ui_space)
+            }
+            if (icon != null) buttonIcon(this, icon, primary)
             setOnClickListener { onClick() }
+        }
+
+    private fun android.app.AlertDialog.Builder.showBranded(danger: Boolean = false): android.app.AlertDialog =
+        show().apply {
+            getButton(android.app.AlertDialog.BUTTON_POSITIVE)?.let { positive ->
+                positive.background = getDrawable(if (danger) R.drawable.dd_button_background
+                    else R.drawable.dd_button_primary_background)
+                positive.setTextColor(getColor(if (danger) R.color.dd_ui_danger else R.color.dd_ui_on_accent))
+                val params = positive.layoutParams
+                if (params is ViewGroup.MarginLayoutParams) {
+                    params.marginStart = uiSize(R.dimen.dd_ui_space)
+                    positive.layoutParams = params
+                }
+            }
         }
 
     private fun showConnectionDialog() {
@@ -618,7 +717,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             .setNegativeButton("Cancel", null)
-            .show()
+            .showBranded()
     }
 
     private fun connectRememberedOrPair() {
@@ -645,7 +744,7 @@ class MainActivity : ComponentActivity() {
                     statusText.text = "Could not forget PC: ${error.message}"
                 }
             }
-            .show()
+            .showBranded(danger = true)
     }
 
     private fun handleQrResult(contents: String?) {
@@ -673,20 +772,26 @@ class MainActivity : ComponentActivity() {
                     invitation.host, invitation.port, invitation.fingerprint, invitation.token,
                 )
             }
-            .show()
+            .showBranded()
     }
 
     private fun showManualConnectionDialog() {
         val fields = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 8, 24, 0)
+            val padding = uiSize(R.dimen.dd_ui_padding)
+            setPadding(padding, padding, padding, padding)
         }
-        fun field(hintText: String, inputType: Int, initial: String = "") =
-            EditText(this).apply {
-                hint = hintText
+        fun field(hintText: String, inputType: Int, initial: String = ""): EditText {
+            fields.addView(uiLabel(hintText).apply {
+                val spacing = uiSize(R.dimen.dd_ui_space)
+                setPadding(0, spacing, 0, spacing)
+            })
+            return EditText(this).apply {
+                contentDescription = hintText
                 setText(initial)
                 this.inputType = inputType
             }.also(fields::addView)
+        }
 
         val hostField = field(
             "Host IP (127.0.0.1 for ADB reverse)",
@@ -723,7 +828,7 @@ class MainActivity : ComponentActivity() {
                     tokenField.text.toString().trim(),
                 )
             }
-            .show()
+            .showBranded()
     }
 
     private fun connectFromIntent(intent: Intent?) {
@@ -766,7 +871,7 @@ class MainActivity : ComponentActivity() {
                     if (connected) {
                         refreshInputReady()
                         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                        connectionButton.text = "Disconnect"
+                        connectionButtonSafeText("Disconnect")
                         screenSelector.isEnabled = readyEpoch == sourceEpoch && pendingSourceRequestId == null
                     } else {
                         inputView.setInputReady(false)
@@ -786,7 +891,7 @@ class MainActivity : ComponentActivity() {
                     }
                     if (!connected && !message.startsWith("Connecting")) {
                         sessionClient = null
-                        connectionButton.text = "Connect"
+                        connectionButtonSafeText("Connect")
                         toolsMenu.visibility = View.VISIBLE
                         menuButton.text = "Hide settings"
                         refreshInputReady()
@@ -832,8 +937,7 @@ class MainActivity : ComponentActivity() {
                         val height = output.getInt("bottom") - output.getInt("top")
                         name to "$name ($width x $height)"
                     }
-                    screenSelector.adapter = ArrayAdapter(this,
-                        android.R.layout.simple_spinner_dropdown_item, sources.map { it.second })
+                    screenSelector.adapter = screenAdapter(sources.map { it.second })
                     applySelectedSource(selected)
                     videoFailed = false
                 }
@@ -889,7 +993,7 @@ class MainActivity : ComponentActivity() {
         )
         sessionClient = client
         inputView.setInputReady(false)
-        connectionButton.text = "Connecting…"
+        connectionButtonSafeText("Connecting…")
         client.connect()
     }
 
@@ -925,7 +1029,7 @@ class MainActivity : ComponentActivity() {
                     }, 5_000)
                 }
             }
-            .show()
+            .showBranded(danger = true)
     }
 
     private fun failVideo(message: String) {
@@ -965,7 +1069,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectionButtonSafeText(text: String) {
-        if (::connectionButton.isInitialized) connectionButton.text = text
+        if (::connectionButton.isInitialized) {
+            connectionButton.text = text
+            buttonIcon(connectionButton,
+                if (text == "Disconnect") R.drawable.ic_dd_connected else R.drawable.ic_dd_disconnected,
+                primary = true)
+        }
     }
 
     private fun inputViewOrNullCancel() {
