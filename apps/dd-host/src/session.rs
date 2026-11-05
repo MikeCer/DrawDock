@@ -15,7 +15,7 @@ use std::{
     collections::HashMap,
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Write},
-    net::{IpAddr, SocketAddr, TcpListener, TcpStream},
+    net::{IpAddr, TcpStream},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -43,7 +43,7 @@ struct CommitTransaction {
 }
 
 pub fn run_server(
-    endpoint: SocketAddr,
+    listeners: Arc<crate::listener_control::Listeners>,
     scene: Arc<Mutex<Scene>>,
     source: SharedSource,
     pairing_info: Option<PathBuf>,
@@ -51,20 +51,25 @@ pub fn run_server(
     mut trust: TrustStore,
     encoder: VideoEncoder,
 ) -> Result<(), String> {
-    let address = endpoint.ip();
-    let port = endpoint.port();
-    if !is_allowed_bind(address) {
-        return Err(format!(
-            "refusing non-loopback, non-private listener address {address}"
-        ));
-    }
-
+    let initial_endpoint = if listeners.managed {
+        None
+    } else {
+        // The CLI has exactly one already-bound endpoint.
+        listeners.endpoints()?.first().copied()
+    };
+    let address = initial_endpoint
+        .map(|endpoint| endpoint.ip())
+        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let port = initial_endpoint
+        .map(|endpoint| endpoint.port())
+        .unwrap_or(47831);
     let fingerprint = trust.fingerprint();
-    let enroll = allow_pairing || pairing_info.is_some() || trust.devices().is_empty();
+    let enroll = !listeners.managed
+        && (allow_pairing || pairing_info.is_some() || trust.devices().is_empty());
     let mut token_bytes = [0u8; 16];
     getrandom::fill(&mut token_bytes)
         .map_err(|error| format!("generate invitation token: {error}"))?;
-    let token = hex(&token_bytes);
+    let mut token = hex(&token_bytes);
     if let Some(path) = pairing_info {
         let info = serde_json::to_vec_pretty(&json!({
             "host": address.to_string(),
@@ -83,13 +88,8 @@ pub fn run_server(
         println!("One-time pairing info written to {}.", path.display());
     }
     let config = Arc::new(trust.tls_config()?);
-    let listener = TcpListener::bind(SocketAddr::new(address, port))
-        .map_err(|error| format!("bind TLS listener {address}:{port}: {error}"))?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| format!("configure TLS listener: {error}"))?;
-
-    let expires = Instant::now() + TOKEN_LIFETIME;
+    let mut expires = Instant::now() + TOKEN_LIFETIME;
+    let mut pairing_endpoint = initial_endpoint;
     let invitation = invitation_uri(address, port, &fingerprint, &token);
     let mut pairing = if enroll {
         Some(PairingWindow::open(
@@ -100,11 +100,18 @@ pub fn run_server(
     } else {
         None
     };
-    println!("Authenticated TLS/TCP listener: {address}:{port}");
+    if !listeners.managed {
+        println!("Authenticated TLS/TCP listener: {address}:{port}");
+    }
+    listeners.report(json!({"event":"ready"}));
     println!("Remembered tablets can reconnect without scanning or another approval.");
     if enroll {
         println!("For a new tablet, scan the QR and approve remembering it in the PC dialog.");
         println!("Invitation expires in 5 minutes; closing it cancels new enrollment only.");
+    } else if listeners.managed {
+        println!(
+            "For a new tablet, select an enabled listener and choose Pair tablet / QR in the launcher."
+        );
     } else {
         println!("To enroll a new tablet, restart with --pair (launcher: -Restart -Pair).");
     }
@@ -118,10 +125,34 @@ pub fn run_server(
     let mut auth_window = Instant::now();
     let mut auth_failures = 0;
     loop {
+        if listeners.stopped() {
+            return Ok(());
+        }
+        if let Some(endpoint) = listeners.invitation()? {
+            getrandom::fill(&mut token_bytes)
+                .map_err(|error| format!("generate invitation: {error}"))?;
+            token = hex(&token_bytes);
+            expires = Instant::now() + TOKEN_LIFETIME;
+            drop(pairing.take());
+            pairing = Some(PairingWindow::open(
+                &invitation_uri(endpoint.ip(), endpoint.port(), &fingerprint, &token),
+                &endpoint.to_string(),
+                TOKEN_LIFETIME,
+            )?);
+            pairing_endpoint = Some(endpoint);
+            attempts = 0;
+            println!("New-device invitation opened for {endpoint}; expires in five minutes.");
+        }
+        let endpoint_closed = match pairing_endpoint {
+            Some(endpoint) => !listeners.enabled(endpoint)?,
+            None => false,
+        };
         if pairing.as_ref().is_some_and(|window| {
             !window.is_open() || Instant::now() >= expires || attempts >= MAX_AUTH_ATTEMPTS
-        }) {
+        }) || endpoint_closed
+        {
             drop(pairing.take());
+            pairing_endpoint = None;
             println!("New-device invitation closed; remembered devices may still reconnect.");
         }
         if auth_window.elapsed() >= Duration::from_secs(10) {
@@ -132,13 +163,19 @@ pub fn run_server(
             thread::sleep(Duration::from_millis(50));
             continue;
         }
-        let (tcp, peer) = match listener.accept() {
-            Ok(connection) => connection,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+        let (tcp, peer, endpoint) = match listeners.accept()? {
+            Some(connection) => connection,
+            None => {
                 thread::sleep(Duration::from_millis(50));
                 continue;
             }
-            Err(error) => return Err(format!("accept TLS connection: {error}")),
+        };
+        let _connection = match listeners.connection(endpoint, &tcp) {
+            Ok(connection) => connection,
+            Err(error) => {
+                eprintln!("Connection no longer eligible: {error}");
+                continue;
+            }
         };
         tcp.set_nonblocking(false)
             .map_err(|error| format!("configure accepted connection from {peer}: {error}"))?;
@@ -177,6 +214,7 @@ pub fn run_server(
             None
         };
         let new_pairing = !resumed
+            && pairing_endpoint == Some(endpoint)
             && pairing.as_ref().is_some_and(PairingWindow::is_open)
             && valid_invitation(&invitation, &token, expires);
         if remembered.is_none() && !new_pairing {
@@ -222,6 +260,10 @@ pub fn run_server(
                 drop(pairing.take());
                 continue;
             }
+            if !listeners.enabled(endpoint)? {
+                eprintln!("Listener disabled before approval completed; device not remembered.");
+                continue;
+            }
             Some(trust.remember(client_name)?)
         };
 
@@ -244,9 +286,7 @@ pub fn run_server(
                 .map_err(|error| format!("generate video credential: {error}"))?;
             let video_token = hex(&video_token);
             let video = VideoService::start(
-                listener
-                    .try_clone()
-                    .map_err(|error| format!("clone video listener: {error}"))?,
+                listeners.video_listener(endpoint)?,
                 Arc::clone(&config),
                 video_token.clone(),
                 Arc::clone(&source),
@@ -270,7 +310,9 @@ pub fn run_server(
                 .get_ref()
                 .set_read_timeout(Some(READ_LEASE))
                 .map_err(|error| format!("set session lease timeout: {error}"))?;
-            println!("Tablet authenticated. Disconnect ends the session; Ctrl+C stops the host.");
+            println!("Tablet authenticated. Disconnect ends the session.");
+            listeners
+                .report(json!({"event":"session","active":true,"endpoint":endpoint.to_string()}));
             let result = serve_authenticated(
                 &mut reader,
                 Arc::clone(&scene),
@@ -852,7 +894,7 @@ pub(crate) fn write_json_line<W: Write>(writer: &mut W, value: &Value) -> Result
         .map_err(|error| format!("write session response: {error}"))
 }
 
-fn is_allowed_bind(address: IpAddr) -> bool {
+pub(crate) fn is_allowed_bind(address: IpAddr) -> bool {
     match address {
         IpAddr::V4(address) => address.is_loopback() || address.is_private(),
         IpAddr::V6(address) => {

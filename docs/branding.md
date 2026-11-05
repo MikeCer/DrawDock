@@ -31,11 +31,18 @@ rules independently of that workspace.
 | Android header/settings | Pen tools, monitor, mode and connection/transport icons with accessible text |
 | Launcher/system splash | Adaptive launcher assets and splash icon, integrated separately from menu styling |
 | Optional onboarding | At most a small selection of optimized illustrations, without delaying drawing or reconnect |
-| Windows host | Preserve the authoritative scene, captured desktop and native approval behavior |
+| Windows host launcher | Embedded component-owned `apps/dd-host/assets/drawdock.ico`; native navy/cyan Win32 controls and labeled actions, without recoloring the captured desktop or changing approval |
 
 Use original artwork without stretching, recoloring logos or removing their
 transparent background. Keep dark and light logo variants paired. Use text
 labels alongside unfamiliar icons, and never rely on color alone for meaning.
+
+The host ICO contains 16-256 px versions derived from the approved
+Android-owned launcher artwork. It is embedded at build time for the window,
+taskbar and tray; neither application reads the ignored design kit at runtime.
+Launcher controls retain native keyboard/accessibility semantics, text
+ON/OFF listener labels and focus feedback. The executable has runtime icons,
+not an installer, startup shortcut or shell icon resource.
 
 Android eight-digit colors use ARGB (`#AARRGGBB`). Convert explicitly for SVG/CSS;
 an eight-digit CSS color uses a different channel order. Standalone SVG icon

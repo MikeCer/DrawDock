@@ -202,11 +202,100 @@ No implementation repair was required. The API 30 runtime and optional
 monochrome-artwork limitations remain as recorded above. Stopped for owner
 visual review without creating a commit.
 
-## Milestone 5: shared zoom and final UX acceptance
+## Milestone 5: native Windows host launcher
+
+The owner inserted this milestone before shared zoom. Build a native Windows
+launcher with a normal window/taskbar icon plus a notification-area (tray) icon,
+host controls and a readable live log viewer, using the DrawDock visual identity
+and component-owned assets. The owner selected independent listener toggles:
+USB/ADB and selected private LAN interfaces can run simultaneously.
+Shared zoom already implemented below is now milestone 6; preserve that work.
+
+Scope:
+
+- Enable/disable USB via ADB reverse forwarding and explicitly selected private
+  Ethernet/Wi-Fi interfaces. Ethernet and Wi-Fi use the same authenticated
+  TLS/TCP transport; neither implies ADB-over-Wi-Fi or a new protocol. Toggling
+  one endpoint must not inadvertently stop the other enabled listeners.
+- Show available/selected ADB devices, eligible local interfaces/IPs, output
+  monitor, port and encoder, reusing current validation and explicit error
+  behavior rather than hardcoding this machine's defaults.
+- Show listener/session state, start/stop results and connection failures.
+  Keep pairing invitations and native PC approval usable without a terminal.
+- Provide a bounded, scrollable live log view with clear source/severity and
+  timestamps. Do not expose remembered credentials, invitation tokens or private
+  key material in ordinary logs.
+- Preserve the direct CLI/PowerShell entry points. No automatic elevation,
+  firewall/profile changes, public/wildcard binds, certificate bypass, Windows
+  startup registration or silently enabled listeners.
+- Verify startup/shutdown, process/listener ownership, ADB mapping cleanup,
+  unavailable devices/interfaces and real tablet connections. Changing/stopping
+  a live session must make its drawing/session consequences explicit.
+
+### Implementation and evidence
+
+Implemented `drawdock-launcher.exe` in native Rust/Win32, as selected by the
+owner instead of WPF. A coordinated `serve-managed` child now shares trust,
+overlay and session ownership across independent listeners. Startup enables
+nothing. Closing hides to the tray; explicit Quit stops owned services.
+Configuration locks while the owned backend exists; Stop all releases it.
+The UI embeds a host-owned multi-resolution icon and uses branded controls,
+bounded/redacted live logs, native pairing and accessible labeled inputs.
+Direct CLI and PowerShell entry points remain available.
+
+| Result | Evidence |
+|---|---|
+| PASS | Rust workspace: all 55 tests passed with `--include-ignored --test-threads=1`, including native TLS video/monitor-switch and persistent-trust/revocation checks |
+| PASS | Cargo build, rustfmt and Clippy with warnings denied |
+| PASS | Native GUI creates/removes actual USB reverse forwarding and loopback TCP listeners; Stop all releases the backend/configuration |
+| PASS | Ethernet and loopback endpoints enabled simultaneously; the actual remembered tablet authenticated over LAN and received NVENC video plus host-committed injected stylus ink |
+| PASS | Disabling USB during that LAN session preserved its video, session and drawing |
+| PASS | Native title-bar Close hides without stopping the owned host, USB mapping or reachable endpoint; relaunch restores the same window |
+| PASS | Explicit Quit exits the owned launcher/host, removes its mapping and closes the TCP listener; a reentrant close-message bug discovered during UI testing was fixed and retested |
+| PASS | Invalid port produces an explicit native error and log entry; launcher Pair opens/closes the native invitation without enrolling or changing production trust |
+| PASS | Live logs follow the newest line, pause without blocking host controls, and resume with retained entries; deliberate local invalid-TLS probes generated the test errors |
+| PASS | After the reported tray bug was fixed, the owner confirmed X-to-tray, single-click restoration, the right-click menu and non-resizable borders all pass |
+| PARTIAL | Explorer-restart recovery and individual tray listener-checkbox actions were not separately verified |
+| PARTIAL | Only one eligible Ethernet interface was available; physical Wi-Fi NIC/multiple-LAN-interface and profile-change runtime tests were not performed |
+| PARTIAL | Real-device ink used injected input, not an owner's physical pen/fullscreen/projector acceptance |
+
+Session-local evidence includes `launcher-tablet-results.json` and
+`launcher-tablet-native-ink.png`. These are test artifacts, not bundled assets.
+The Android source is unchanged in this milestone. No elevation, firewall,
+network-profile, startup or certificate-policy changes were made.
+
+The launcher deliberately supports one active tablet, not multi-user drawing.
+Other clients can wait/time out while it is active. Abrupt process termination
+can leave external ADB forwarding behind; normal shutdown ownership is tested.
+Runtime taskbar/window/tray artwork is embedded; installer and executable-shell
+icon resources are not included.
+
+### Tray restoration and fixed-window follow-up
+
+The owner reported a hidden launcher becoming unreachable after clicking the
+tray icon. The original handler restored only on legacy double-click events.
+It now explicitly negotiates version-4 notifications, decodes their packed
+event word, and restores on single-click, double-click or keyboard selection.
+Tray/lifecycle messages bypass keyboard-dialog filtering, and restoration and
+native popup message pumping no longer hold a mutable UI-state borrow.
+Failed tray updates recreate the icon; a registration failure leaves the
+window visible with an explicit error. X and Hide use the same checked path.
+
+The window no longer has a sizing frame or enabled Maximize action; tracking
+bounds are fixed at its DPI-scaled size. Build, Clippy and all five launcher
+tests pass, including the new notification-routing regression. Native
+accessibility exposes Maximize as disabled. The owner tested the rebuilt
+application and confirmed all requested tray and resizing checks pass.
+
+**Implemented; stop for owner UI/UX testing and optional commit.**
+Shared zoom was already owner-committed as `6039b56`; performance work and
+the remaining mandatory physical Windows acceptance stay in milestone 6.
+
+## Milestone 6: shared zoom, performance optimization and final UX acceptance
 
 **PARTIAL: shared zoom is implemented, built and installed; automated device
-checks PASS. Physical-pen/fullscreen/projector and final accessibility acceptance
-remain pending owner review. No commit was created.**
+checks PASS. Performance optimization and physical-pen/fullscreen/projector
+and final accessibility acceptance remain outstanding. No commit was created.**
 
 The owner approved shared desktop/annotation zoom, two-finger pinch/pan and
 menu Zoom in / Zoom out / Reset, bounded to 100-400%. Reset is 100%;
@@ -258,6 +347,32 @@ The final APK remains installed. Temporary tablet injector/XML files and local
 class/dex scratch directories were removed. The test host is stopped, with no
 listener, magnifier or known-pattern fixture window remaining.
 
+### Performance optimization scope
+
+The owner explicitly included performance optimization in milestone 6.
+This is implementation work driven by measurements, not only a test/report phase.
+
+- Establish repeatable USB and private-LAN baselines for pen-to-PC and
+  pen-to-tablet latency, frame pacing, zoom/pan turnaround, CPU/GPU usage,
+  memory and network throughput. Distinguish measured physical presentation
+  latency from software timestamps/proxies.
+- Profile capture, encoding, TLS queues, decoding, native magnifier refresh
+  and rendering. Optimize demonstrated bottlenecks, especially decoder/capture
+  recreation and repeated zoom transitions, without adding unbounded buffering.
+- Improve pinch/pan responsiveness and video/ink handoff continuity. Address
+  capture-to-scene revision coordination so provisional ink is not removed
+  before its committed counterpart is present in the displayed frame.
+- Preserve authenticated transport, bounded queues, source-epoch/readiness
+  safety and coordinate alignment. Do not mask stalls by increasing timeouts,
+  dropping dependent H.264 frames or substituting tablet-only magnification.
+- Repeat equivalent before/after workloads and extended drawing/presentation
+  soak tests, including fullscreen and repeated source/zoom changes. Record
+  regressions, remaining limits and unavailable hardware honestly.
+
+Agree measurable acceptance targets from the baseline before implementing
+optimizations; do not invent achieved latency/FPS or claim that this newly
+added work is already complete.
+
 ### Remaining acceptance and limitations
 
 The device tests use injected stylus/touch input on the actual tablet and
@@ -286,6 +401,7 @@ commit; do not mark the mandatory physical Windows annotation acceptance PASS.
 | 2 | Android Views radial-menu tokens, icons and visual states | Committed by owner as `84bbbd2` with milestone 3 |
 | 3 | Header/settings and dialogs; preserve canvas rendering | Committed by owner as `84bbbd2`; owner approved milestone 4 |
 | 4 | Adaptive launcher and API-compatible system splash | Owner committed `aa523cb`; post-crash rebuild/device checks pass on API 36; API 30 runtime unverified |
-| 5 | Shared desktop/annotation zoom, pinch/pan and menu controls; final UX/accessibility acceptance | Implemented and installed; automated checks PASS; PARTIAL pending owner physical/fullscreen/accessibility acceptance; uncommitted |
+| 5 | Native Windows host launcher/window plus tray icon; independent simultaneous USB/private-LAN listeners and live logs | Implemented; automated/native/device checks PASS; tray/UX owner review and optional commit pending |
+| 6 | Shared desktop/annotation zoom, performance optimization, latency/soak and final UX/accessibility acceptance | Zoom owner-committed as `6039b56`; PARTIAL: performance work and owner physical/fullscreen/accessibility acceptance outstanding |
 
 Do not roll these milestones into one change or create commits automatically.

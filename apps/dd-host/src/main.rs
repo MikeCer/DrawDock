@@ -1,6 +1,8 @@
 #[cfg(not(windows))]
 compile_error!("dd-host currently implements only the native Windows presenter");
 
+mod host_environment;
+mod listener_control;
 mod pairing_window;
 mod session;
 mod source;
@@ -87,7 +89,7 @@ fn run(args: Vec<String>) -> Result<(), String> {
             println!("The overlay is click-through and does not activate.");
             windows_overlay::run(output, Arc::new(Mutex::new(Scene::demo())))
         }
-        Some("serve") => {
+        Some("serve" | "serve-managed") => {
             let output = selected_output(&args)?;
             let listen = selected_listen_address(&args)?;
             let port = selected_port(&args)?;
@@ -97,29 +99,64 @@ fn run(args: Vec<String>) -> Result<(), String> {
             let trust = trust::TrustStore::open_default()?;
             let scene = Arc::new(Mutex::new(Scene::default()));
             let source = Arc::new(Mutex::new(source::SelectedSource::new(output.clone())));
+            let managed = args[0] == "serve-managed";
+            if managed
+                && (allow_pairing
+                    || pairing_info.is_some()
+                    || args
+                        .iter()
+                        .any(|arg| matches!(arg.as_str(), "--listen" | "--port")))
+            {
+                return Err("serve-managed uses launcher commands for endpoints/pairing; use serve for direct CLI options".into());
+            }
+            let listeners = if managed {
+                listener_control::Listeners::managed()?
+            } else {
+                listener_control::Listeners::single(SocketAddr::new(listen, port))?
+            };
+            let server_listeners = Arc::clone(&listeners);
             let server_source = Arc::clone(&source);
             let server_scene = Arc::clone(&scene);
-            thread::Builder::new()
+            let server = thread::Builder::new()
                 .name("drawdock-tls-session".into())
                 .spawn(move || {
-                    if let Err(error) = session::run_server(
-                        SocketAddr::new(listen, port),
+                    let result = session::run_server(
+                        server_listeners,
                         server_scene,
                         server_source,
                         pairing_info,
                         allow_pairing,
                         trust,
                         encoder,
-                    ) {
+                    );
+                    if let Err(error) = &result {
                         eprintln!("DrawDock session stopped: {error}");
                     }
+                    if managed {
+                        windows_overlay::request_stop();
+                    }
+                    result
                 })
                 .map_err(|error| format!("start session thread: {error}"))?;
-            println!(
-                "Starting host overlay on {}; Ctrl+C removes the overlay and stops this process.",
-                output.name
-            );
-            windows_overlay::run_selected(output, scene, Some(source))
+            if managed {
+                println!(
+                    "Starting host overlay on {}; controlled by the Windows launcher.",
+                    output.name
+                );
+            } else {
+                println!(
+                    "Starting host overlay on {}; Ctrl+C removes the overlay and stops this process.",
+                    output.name
+                );
+            }
+            let result = windows_overlay::run_selected(output, scene, Some(source));
+            if managed {
+                listeners.stop();
+                server
+                    .join()
+                    .map_err(|_| "host session thread panicked")??;
+            }
+            result
         }
         Some("devices") => {
             let mut trust = trust::TrustStore::open_default()?;

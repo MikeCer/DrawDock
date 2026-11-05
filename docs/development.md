@@ -49,6 +49,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build -p dd-host
 ```
 
+This builds both `target\debug\dd-host.exe` and the native Windows-subsystem
+`target\debug\drawdock-launcher.exe`. The default Cargo run target remains the
+CLI host. See [launcher operation](run-windows.md#native-windows-launcher) for
+listener, process and forwarding ownership.
+
 If using a regular PowerShell, initialize the installed Visual Studio environment
 and run Cargo inside the **same** child process. Substitute your installation:
 

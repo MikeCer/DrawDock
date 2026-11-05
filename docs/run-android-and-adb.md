@@ -24,7 +24,7 @@ Camera hardware is optional because manual invitation entry is available.
 
 ## USB forwarding
 
-The [Windows launcher](run-windows.md#usb-launcher) manages forwarding safely.
+The [Windows launcher](run-windows.md#native-windows-launcher) manages forwarding safely.
 For direct CLI use, inspect existing mappings first:
 
 ```powershell

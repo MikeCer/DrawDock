@@ -13,6 +13,9 @@ Paths below are relative to the repository root.
 |---|---|
 | `crates\dd-scene\src\lib.rs` | Platform-independent scene, validation, selection, affine transforms, canvas, history and transient laser |
 | `apps\dd-host\src\main.rs` | Windows CLI, DPI initialization and application composition |
+| `apps\dd-host\src\bin\drawdock-launcher.rs` / `launcher` | Native Win32 launcher/tray, bounded logs and owned backend/ADB lifecycle |
+| `apps\dd-host\src\listener_control.rs` | Coordinated live listener set, endpoint cancellation, session events and managed commands |
+| `apps\dd-host\src\host_environment.rs` | Bounded subprocess execution and read-only Windows network/profile discovery |
 | `apps\dd-host\src\windows_overlay.rs` | Output enumeration, topmost layered window, relocation and presentation |
 | `apps\dd-host\src\raster.rs` | Generated SVG, Windows font lookup, resvg rasterization and BGRA conversion |
 | `apps\dd-host\src\session.rs` | TLS control service, authentication, protocol dispatch, source barriers and commit transactions |
@@ -28,6 +31,27 @@ Paths below are relative to the repository root.
 `dd-scene` contains no Windows APIs. Platform operations stay in the host;
 the host binary has a Windows-only compile guard. Android and Rust share a
 wire contract, not a common source library.
+
+### Launcher and listener ownership
+
+The native launcher starts one sibling `dd-host.exe serve-managed` without a
+console. Bounded redirected pipes carry stdin JSON commands and correlated
+stdout events alongside readable logs. No separate local management listener
+is opened. The managed host initially binds nothing; explicit commands enable
+loopback/ADB and selected private LAN endpoints independently. A periodic
+profile/address check removes managed LAN endpoints that become ineligible.
+
+All endpoints share one exclusive trust store, overlay and active annotation
+session. Video authenticates on the endpoint that accepted the control session.
+Disabling that endpoint closes its active socket and invokes normal input,
+zoom and scene cleanup; disabling another endpoint preserves the session.
+The direct `serve` CLI retains its single explicitly bound endpoint.
+
+The launcher owns its child through a kill-on-close Windows Job Object.
+Normal Stop/Quit requests graceful shutdown, removes only owned ADB mappings
+and reports failures; a bounded shutdown deadline contains a stuck owned host.
+Closing the window merely hides it to the tray. Existing CLI processes and
+preexisting forwarding are never silently adopted or terminated.
 
 ## Input to physical output
 

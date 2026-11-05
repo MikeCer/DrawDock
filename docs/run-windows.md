@@ -14,7 +14,66 @@ Select an exact device name printed by `outputs`; examples below use
 `\\.\DISPLAY2`. Enumerate again after changing monitors, display modes or DPI
 configuration rather than copying another machine's geometry.
 
-## USB launcher
+## Native Windows launcher
+
+The same build produces the console host and a native Rust/Win32 launcher:
+
+```powershell
+& .\target\debug\drawdock-launcher.exe
+```
+
+The launcher has a fixed-size, non-resizable taskbar window and a
+notification-area (tray) icon.
+All listeners start **off**. Select the output, port, encoder and authorized USB
+device before enabling a listener. ADB is discovered from the Android SDK
+environment or PATH; **Browse ADB...** can select an explicit executable.
+Choose NVENC only with compatible NVIDIA hardware and FFmpeg.
+
+Select a listener row, then **Enable selected** or **Disable selected**.
+USB/ADB binds loopback and creates an explicit reverse mapping. Ethernet and
+Wi-Fi use selected assigned RFC1918 IPv4 addresses on Private/domain profiles;
+they are the same authenticated TLS/TCP transport, not separate protocols.
+Multiple endpoints can be enabled simultaneously, with **one active tablet
+session** sharing the host's trust store, overlay and scene. Additional tablets
+are not supported concurrently and may time out while a session is active.
+
+**Pair tablet / QR** opens the existing native invitation for an enabled,
+selected endpoint. Native PC approval and certificate pinning are unchanged.
+The Android client still saves one endpoint; switching USB/LAN or changing an
+IP requires deliberate re-pairing as described below.
+
+Closing the window or choosing **Hide to tray** leaves its listeners running.
+Single-click the tray icon to restore the window; its right-click menu also controls
+listeners, Stop all and Quit. Launching the executable again restores the
+existing window rather than starting another backend.
+If tray registration is lost, the launcher attempts to recreate it; failure
+keeps the window visible and reports an error instead of hiding an unreachable UI.
+**Stop all** stops the owned host and unlocks configuration, even if its last
+listener was already disabled. **Quit** also exits the launcher.
+Disabling the endpoint serving a tablet ends that session and clears its
+drawings; the launcher warns before intentionally ending an active session.
+Disabling an unrelated endpoint does not interrupt the active session.
+
+The log viewer retains the latest 500 lines with timestamps and source/severity,
+truncates oversized lines and masks pairing/private-key material.
+**Pause logs** pauses display updates, not the host; **Clear view** clears only
+the retained log view. Logs are not saved to disk.
+
+Only the launcher's own child host/encoder processes and reverse mappings it
+created are stopped/removed. Existing equal mappings are reused and preserved;
+conflicting mappings or an existing host's exclusive trust lock produce errors,
+not automatic takeover. Abrupt termination or a system crash can leave an ADB
+mapping behind; inspect `adb reverse --list` before removing a known stale one.
+LAN eligibility is rechecked periodically, not instantaneously; disappearing
+addresses or nonprivate profiles disable affected endpoints.
+
+The UI is native Rust/Win32, not WPF or a PowerShell GUI. Read-only built-in
+Windows PowerShell queries discover interface addresses/profiles. No elevation,
+firewall/profile changes, Windows startup registration, public listener or
+certificate bypass is performed. Keep `drawdock-launcher.exe` beside
+`dd-host.exe`; FFmpeg and ADB retain their existing prerequisites.
+
+## PowerShell USB launcher
 
 Connect and authorize the tablet in ADB. Set your paths/device explicitly:
 
@@ -51,7 +110,7 @@ and defaults to NVENC. Override them for your environment. Use
 
 Restart ends the active session and its drawings. Use `-Restart -Pair` when
 enrolling another tablet or replacing a forgotten/revoked credential. The
-launcher does not change firewall, elevation or PowerShell execution policy.
+script does not change firewall, elevation or PowerShell execution policy.
 
 ## Direct CLI
 

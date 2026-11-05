@@ -9,7 +9,7 @@ use std::{
     ptr::{null, null_mut},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
     time::Duration,
@@ -212,6 +212,11 @@ unsafe extern "system" fn collect_monitor(
 }
 
 static THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+pub fn request_stop() {
+    STOP_REQUESTED.store(true, Ordering::Release);
+}
 
 unsafe extern "system" fn console_control(code: u32) -> Bool {
     if matches!(code, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
@@ -483,7 +488,9 @@ unsafe fn show_layered_window(
     let thread_id = unsafe { GetCurrentThreadId() };
     THREAD_ID.store(thread_id, Ordering::Relaxed);
     // SAFETY: Handler has static lifetime and only posts a quit message to the owning thread.
-    if unsafe { SetConsoleCtrlHandler(Some(console_control), TRUE) } == 0 {
+    if !unsafe { GetConsoleWindow() }.is_null()
+        && unsafe { SetConsoleCtrlHandler(Some(console_control), TRUE) } == 0
+    {
         unsafe {
             SelectObject(dc, old_bitmap);
             DeleteObject(bitmap);
@@ -492,10 +499,13 @@ unsafe fn show_layered_window(
         }
         return Err(last_error("SetConsoleCtrlHandler"));
     }
-    println!("Overlay visible. Use Ctrl+C here or close this process to stop.");
+    println!("Overlay visible.");
     let mut switched = false;
     let mut magnifier: Option<crate::windows_zoom::Magnifier> = None;
     loop {
+        if STOP_REQUESTED.load(Ordering::Acquire) {
+            break;
+        }
         if let Some(source) = selected_source {
             let mut selected = source.lock().map_err(|_| "source lock is poisoned")?;
             if selected.output.name != output.name {
@@ -698,6 +708,7 @@ unsafe extern "system" {
         handler: Option<unsafe extern "system" fn(u32) -> Bool>,
         add: Bool,
     ) -> Bool;
+    fn GetConsoleWindow() -> Hwnd;
     fn PeekMessageW(message: *mut Msg, hwnd: Hwnd, min: u32, max: u32, remove: u32) -> Bool;
     fn TranslateMessage(message: *const Msg) -> Bool;
     fn DispatchMessageW(message: *const Msg) -> Lresult;

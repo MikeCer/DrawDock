@@ -18,6 +18,8 @@ The desktop application runs natively on Windows, without WSL, Linux or Docker.
 USB uses an explicit ADB reverse mapping; private-network connections use an
 explicitly selected IP address. First pairing uses a QR invitation and local
 PC approval; remembered devices reconnect with certificate pinning.
+The native Windows launcher provides a taskbar window, tray icon, independent
+USB/private-LAN listener controls and live logs. The direct CLI remains available.
 
 ## Getting started
 
