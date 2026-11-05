@@ -9,11 +9,9 @@ before claiming a verified publisher.
 
 ## GitHub Actions
 
-`build.yml` tests/builds native Windows executables and the Android debug APK on
-branch pushes and pull requests. It does not expose release signing secrets to
-pull requests.
-
-`release.yml` runs when a tag matching `v*` is pushed. A validation job accepts
+Builds and tests run only through `release.yml` when a tag matching `v*` is
+pushed. Ordinary branch pushes and pull requests do not start a build.
+A validation job accepts
 only `vMAJOR.MINOR.PATCH`, with decimal components from 0 to 999, no leading
 zeros or prerelease suffixes; `v0.0.0` is rejected. For example:
 
