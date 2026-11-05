@@ -347,7 +347,7 @@ impl Ui {
         self.add(
             ADB,
             "EDIT",
-            &worker::default_adb(),
+            &worker::default_adb()?,
             WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL as u32,
         )?;
         self.add(1007, "STATIC", "USB device (authorization required)", 0)?;

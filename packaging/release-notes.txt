@@ -1,0 +1,17 @@
+Windows: download the x64 setup EXE, or extract the portable ZIP and run
+drawdock-launcher.exe. Publisher metadata: Mike Cerreto. The Windows files
+are not Authenticode-signed; Windows may report an unknown publisher.
+The installer is per-user and does not change firewall rules or install drivers.
+ADB authorization and private-network listener selection remain explicit.
+
+Android: install the signed release APK. It uses a dedicated persistent release
+key, not the development debug key. Upgrading a debug installation requires
+uninstalling it first; that removes its saved pairing and application data.
+
+FFmpeg and x264 are separate GPLv2-or-later executables. Exact corresponding
+source archives and build instructions are included in third-party-sources.zip;
+notices are included with the Windows runtime. DrawDock remains MIT-licensed.
+Verify downloads using SHA256SUMS.txt.
+
+This is a Windows-first PoC. Automated build/install checks are not proof of
+physical pen, projector or fullscreen behavior; see the project acceptance status.

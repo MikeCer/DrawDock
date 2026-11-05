@@ -10,6 +10,14 @@ use std::{
 
 pub const NO_WINDOW: u32 = 0x0800_0000;
 
+pub fn bundled_tool(name: &str) -> Result<std::path::PathBuf, String> {
+    Ok(std::env::current_exe()
+        .map_err(|error| format!("locate bundled {name}: {error}"))?
+        .with_file_name("runtime")
+        .join(name)
+        .join(format!("{name}.exe")))
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Network {
     pub name: String,

@@ -1,0 +1,20 @@
+DrawDock is published by Mike Cerreto under the MIT license.
+
+The Windows distribution includes separate third-party executables:
+
+FFmpeg (https://ffmpeg.org) and x264 (https://www.videolan.org/developers/x264.html)
+are distributed under GPL version 2 or later. These are separate processes,
+not libraries linked into DrawDock. License texts are in runtime\ffmpeg.
+The exact source archives, pinned checksums and native build instructions are
+provided in the DrawDock-<version>-third-party-sources.zip release asset.
+No FFmpeg source modifications are made. The configuration is recorded in
+Build-Runtime.ps1 and in ffmpeg.exe -buildconf. NVENC headers carry their own
+permissive license, preserved in nvEncodeAPI-license.h.
+
+The Android Debug Bridge and its Windows helper DLLs come from Android SDK
+Platform-Tools 37.0.0. Their notices and licenses are preserved verbatim in
+runtime\adb\NOTICE.txt. Upstream: https://android.googlesource.com/platform/packages/modules/adb/
+No USB driver is installed. Users must authorize their own tablet explicitly.
+
+Compiler/runtime notices are in runtime\ffmpeg\toolchain-licenses.
+This installer does not grant codec patent rights or alter third-party licenses.

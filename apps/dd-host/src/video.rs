@@ -284,7 +284,11 @@ impl Capture {
     fn start(source: &SelectedSource, encoder: VideoEncoder) -> Result<Self, String> {
         let output = &source.output;
         let (width, height) = encoded_size(output.width(), output.height());
+        let bundled = crate::host_environment::bundled_tool("ffmpeg")?;
         let executable = std::env::var_os("DRAWDOCK_FFMPEG").unwrap_or_else(|| {
+            if bundled.is_file() {
+                return bundled.into_os_string();
+            }
             let installed = r"C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe";
             if std::path::Path::new(installed).is_file() {
                 installed.into()

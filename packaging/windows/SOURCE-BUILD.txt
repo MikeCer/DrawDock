@@ -1,0 +1,17 @@
+Rebuilding the bundled FFmpeg executable on native 64-bit Windows
+
+1. Extract this source ZIP into a folder; it contains the exact FFmpeg, x264
+   and NVENC header archives used for the release.
+2. Provide PowerShell 7 and MSYS2 MINGW64 with packages:
+   mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf make nasm diffutils
+   The original toolchain package versions are in toolchain-packages.txt.
+3. In PowerShell, from the extracted source directory:
+   .\Build-Runtime.ps1 -MsysRoot C:\msys64 -WorkRoot C:\Temp\DrawDock-build -SkipAdb
+4. The resulting executable is C:\Temp\DrawDock-build\runtime\ffmpeg\ffmpeg.exe.
+
+Use a build directory without spaces. The script validates SHA-256 checksums,
+extracts the supplied archives, installs x264/NVENC headers into a private
+prefix, and compiles FFmpeg with static dependencies. The configure command is
+in Build-Runtime.ps1; ffmpeg.exe -buildconf also prints it. No source patches
+are applied. No WSL, Docker or Linux system is needed. MSYS2 is a build tool,
+not a requirement for using the Windows application.

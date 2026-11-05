@@ -531,12 +531,16 @@ fn run(receiver: Receiver<Message>, sender: SyncSender<Message>, events: &SyncSe
     }
 }
 
-pub fn default_adb() -> String {
+pub fn default_adb() -> Result<String, String> {
+    let bundled = host_environment::bundled_tool("adb")?;
+    if bundled.is_file() {
+        return Ok(bundled.to_string_lossy().into());
+    }
     for variable in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
         if let Some(root) = std::env::var_os(variable) {
             let path = Path::new(&root).join("platform-tools").join("adb.exe");
             if path.is_file() {
-                return path.to_string_lossy().into();
+                return Ok(path.to_string_lossy().into());
             }
         }
     }
@@ -544,11 +548,11 @@ pub fn default_adb() -> String {
         for directory in std::env::split_paths(&paths) {
             let path = directory.join("adb.exe");
             if path.is_file() {
-                return path.to_string_lossy().into();
+                return Ok(path.to_string_lossy().into());
             }
         }
     }
-    "adb.exe".into()
+    Ok("adb.exe".into())
 }
 
 #[cfg(test)]

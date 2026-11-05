@@ -15,13 +15,16 @@ output to the workspace `TextureView`.
 FFmpeg executable resolution is:
 
 1. The process-local `DRAWDOCK_FFMPEG` override.
-2. The direct Chocolatey-installed executable, when present:
+2. `runtime\ffmpeg\ffmpeg.exe` beside the host, in installed/portable distributions.
+3. The direct Chocolatey-installed executable, when present:
    `C:\ProgramData\chocolatey\lib\ffmpeg\tools\ffmpeg\bin\ffmpeg.exe`.
-3. `ffmpeg` resolved from `PATH`.
+4. `ffmpeg` resolved from `PATH`.
 
 Prefer the actual executable over a launcher shim so process ownership/cleanup
-tracks capture correctly. FFmpeg is external and is not downloaded or bundled
-by DrawDock. Check the chosen build's licensing before redistribution.
+tracks capture correctly. FFmpeg runs as a separate process. Release packages
+bundle a minimal native build, its notices and corresponding source;
+development builds can use external tools. See [builds and releases](releasing.md)
+before redistributing a changed build.
 
 ## Geometry and format
 

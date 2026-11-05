@@ -1,4 +1,9 @@
 /target/
+/dist/
+*.p12
+*.pfx
+*.jks
+*.keystore
 /android/.gradle/
 /android/local.properties
 /android/app/build/

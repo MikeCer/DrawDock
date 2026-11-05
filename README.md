@@ -23,6 +23,11 @@ USB/private-LAN listener controls and live logs. The direct CLI remains availabl
 
 ## Getting started
 
+Tagged [GitHub releases](https://github.com/MikeCer/DrawDock/releases) contain
+the per-user Windows installer and signed Android APK. See
+[builds and releases](docs/releasing.md) for installation, publisher and signing
+details.
+
 1. Follow the [development setup](docs/development.md) to build the host and APK.
 2. [Start the Windows host](docs/run-windows.md) and
    [install/connect the Android app](docs/run-android-and-adb.md).

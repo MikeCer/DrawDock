@@ -13,6 +13,7 @@ These guides describe how DrawDock works and how to build, change and test it.
 | [Features](features.md) | Drawing tools, radial menu, editing and presentation semantics |
 | [Brand and UI guidelines](branding.md) | Asset ownership, documentation imagery, UI styling and compatibility rules |
 | [Development](development.md) | Prerequisites, repository layout, build/test commands and contribution workflow |
+| [Builds and releases](releasing.md) | Tagged releases, per-user Windows installer, runtime licenses and APK signing |
 | [Windows host](run-windows.md) | CLI, launcher, displays, transport and device administration |
 | [Android and ADB](run-android-and-adb.md) | Build, install, pair, connect and troubleshoot |
 | [Protocol](protocol.md) | Control JSON, transactions, response shapes and video framing |

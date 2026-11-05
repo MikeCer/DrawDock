@@ -2,6 +2,8 @@ plugins {
     id("com.android.application")
 }
 
+val releaseStore = providers.environmentVariable("DRAWDOCK_ANDROID_KEYSTORE")
+
 android {
     namespace = "com.drawdock"
     compileSdk = 36
@@ -10,9 +12,25 @@ android {
         applicationId = "com.drawdock"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = providers.environmentVariable("DRAWDOCK_VERSION_CODE").orNull?.toInt() ?: 1
+        versionName = providers.environmentVariable("DRAWDOCK_VERSION").orNull ?: "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (releaseStore.isPresent) {
+            create("release") {
+                storeFile = file(releaseStore.get())
+                storePassword = providers.environmentVariable("DRAWDOCK_ANDROID_STORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("DRAWDOCK_ANDROID_KEY_ALIAS").get()
+                keyPassword = providers.environmentVariable("DRAWDOCK_ANDROID_KEY_PASSWORD").get()
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (releaseStore.isPresent) signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     compileOptions {
