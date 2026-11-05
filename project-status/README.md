@@ -9,6 +9,7 @@ validation evidence from the [contributor documentation](../docs/README.md).
 | [Environment inventory](environment.md) | Hardware, tools and device observations |
 | [Implementation plan](implementation-plan.md) | Windows-first milestones and acceptance criteria |
 | [Feasibility report](feasibility-report.md) | Implementation history, experiments, measurements and acceptance work |
+| [Brand adoption](brand-adoption.md) | Owner-gated branding milestones and review checklist |
 
 These are point-in-time records. Earlier sections can contain historical test
 counts, configurations and behavior; use the technical guides and source for

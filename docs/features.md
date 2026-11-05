@@ -17,6 +17,10 @@ tap is recognized, preventing a long-press menu from clicking the desktop.
 Contacts started while input is suspended can open the menu but cannot become
 ink/clicks when readiness changes.
 
+For the menu's visual vocabulary and labeled design references, see
+[Brand and UI guidelines](branding.md#radial-menu-design-references). The
+interaction descriptions here, not mockup styling, define its behavior.
+
 ## Drawing tools
 
 | Tool | Interaction and scene representation |

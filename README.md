@@ -1,5 +1,7 @@
 # DrawDock
 
+![DrawDock connects a pen-enabled tablet to a PC for live annotations, a radial pen menu, and USB or Wi-Fi operation.](docs/assets/brand/github-cover.png)
+
 DrawDock turns an Android tablet and pen into a drawing and presentation
 companion for Windows. A native Rust host renders annotations over applications
 on the selected PC monitor or projector. A Kotlin Android client mirrors that
@@ -29,6 +31,7 @@ PC approval; remembered devices reconnect with certificate pinning.
 | [Documentation index](docs/README.md) | Contributor documentation map |
 | [Architecture](docs/architecture.md) | Components, data flow and lifecycle |
 | [Features and interaction](docs/features.md) | Drawing, editing and presentation behavior |
+| [Brand and UI guidelines](docs/branding.md) | Assets, design references and interaction-preserving styling |
 | [Protocol](docs/protocol.md) | Wire format, commands, responses and limits |
 | [Pairing and security](docs/pairing-and-threat-model.md) | Authentication, storage and trust boundaries |
 | [Video streaming](docs/video-streaming.md) | Capture, encoding, decoding and ink handoff |

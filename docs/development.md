@@ -28,12 +28,15 @@ Do not commit `android\local.properties`, credentials or machine-specific paths.
 | `android\app` | Kotlin client and JVM unit tests |
 | `tests\fixtures` | JSON scenes for deterministic replay |
 | `docs` | Contributor-facing technical documentation |
+| `docs\assets\brand` | Self-contained documentation images |
 | `specs` | Original design and requirement inputs |
 | `project-status` | Milestones, environment snapshots and validation reports |
 
 The [architecture guide](architecture.md) maps individual source files.
 The technical guides describe implementation behavior; design inputs can contain
 broader proposals that are not part of the executable contract.
+The optional root `brand` design workspace is ignored; contributor builds and
+documentation must not depend on it. See [asset ownership](branding.md).
 
 ## Rust build and checks
 
