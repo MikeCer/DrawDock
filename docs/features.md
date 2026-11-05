@@ -95,6 +95,43 @@ canvas state and therefore appear in the mirrored video.
 Blackboard forces Draw mode and prohibits Pointer mode, including when restored
 by Undo, so the covered desktop cannot receive concealed mouse clicks.
 
+## Shared zoom and pan
+
+Use two fingers on the ready mirrored workspace to pinch or pan, or open
+More > Zoom for Zoom in, Zoom out and Reset 100%. Menu steps multiply zoom
+by 1.25 or 0.8; magnification is bounded to 100-400%. Pinch is anchored to the
+two-finger midpoint, and panning keeps the viewport inside the selected output.
+The Zoom submenu's accessible description reports acknowledged magnification.
+Single-finger motion remains ignored; fingers do not draw, inject pointer clicks
+or open the pen menu. Pen contact does not become a navigation gesture.
+
+Zoom affects the selected physical Windows monitor and its streamed video,
+including desktop content, annotations, Blackboard/Grid and laser. It is not
+tablet-only magnification or application-specific document zoom. Two-finger
+updates coalesce while the host applies a view and the corresponding video
+becomes ready; there is no speculative local video transform. Input pauses
+through that barrier, so a change can have a visible capture/decoder delay.
+
+Annotation geometry remains in the original full-monitor coordinate space.
+New points, widths, selections, transforms and tablet Pointer targets are mapped
+through the current viewport. Existing objects are magnified, not rewritten.
+Changing zoom releases held input and clears transient selection/unfinished
+geometry; reselect an object after navigating.
+
+Reset, monitor switching, disconnect and Android backgrounding remove
+magnification. Returning to a monitor/reconnecting starts at 100%; zoom is not
+saved with per-monitor drawings. Clear/Undo/Redo change scene state, not zoom.
+Monitor removal or geometry changes end the session and remove its zoom window.
+
+The Windows host uses a monitor-scoped native magnifier window, not global
+Windows Magnifier settings. Tablet Pointer mode applies the inverse mapping.
+The physical PC mouse is not intercepted/remapped; reset to 100% before using
+it to click desktop controls. Secure desktop, protected content and exclusive
+fullscreen applications remain subject to Windows overlay/capture restrictions.
+
+Shared zoom requires a host advertising the `shared_zoom` capability; older
+hosts show an explicit update-required message rather than local-only zoom.
+
 ## Tablet clipboard images
 
 Paste is an explicit user action in a ready Draw session. It reads a clipboard

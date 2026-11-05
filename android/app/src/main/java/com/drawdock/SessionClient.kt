@@ -42,7 +42,10 @@ class SessionClient(
     private val onVideoError: (String) -> Unit,
     private val rememberedDeviceId: String?,
     private val onRemembered: (String, String) -> Unit,
+    private val onZoomSelected: (JSONObject, Long) -> Unit,
+    private val onZoomCapability: (Boolean) -> Unit,
 ) {
+    var viewport = SharedViewport()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val closed = AtomicBoolean(false)
     private val credentialLock = Any()
@@ -112,6 +115,7 @@ class SessionClient(
                 connection.soTimeout = 0
                 val sources = response.getJSONArray("sources")
                 val selected = response.getJSONObject("selected")
+                mainHandler.post { onZoomCapability(response.optBoolean("shared_zoom")) }
                 sourceEpoch = selected.getLong("source_epoch")
                 mainHandler.post { onSources(sources, selected) }
                 output = streamOut
@@ -166,7 +170,8 @@ class SessionClient(
             }
             if (queuedBytes.compareAndSet(current, current + reserved)) break
         }
-        val command = SessionCommand.Commit(mark, viewportWidth, viewportHeight, reserved, sourceEpoch)
+        val command = SessionCommand.Commit(viewport.mark(mark, viewportWidth, viewportHeight),
+            viewportWidth, viewportHeight, reserved, sourceEpoch)
         if (!enqueue(command)) {
             queuedBytes.addAndGet(-reserved)
             return false
@@ -183,10 +188,14 @@ class SessionClient(
         return requestId.takeIf { enqueue(SessionCommand.Editor(message.toString(), sourceEpoch)) }
     }
 
+    fun zoom(view: SharedViewport): Long? = editor(JSONObject().put("type", "set_zoom")
+        .put("zoom", JSONObject().put("scale", view.scale.toDouble())
+            .put("left", view.left.toDouble()).put("top", view.top.toDouble())))
+
     fun sendLaser(active: Boolean, x: Float, y: Float, color: Int, width: Int, height: Int): Boolean {
         if (width <= 0 || height <= 0) return false
-        return enqueue(SessionCommand.Laser(active, (x / width).coerceIn(0f, 1f),
-            (y / height).coerceIn(0f, 1f), color, sourceEpoch))
+        val point = viewport.source((x / width).coerceIn(0f, 1f), (y / height).coerceIn(0f, 1f))
+        return enqueue(SessionCommand.Laser(active, point.first, point.second, color, sourceEpoch))
     }
     fun selectSource(name: String): Long? {
         val requestId = nextSourceRequestId.incrementAndGet()
@@ -226,8 +235,8 @@ class SessionClient(
             val command = SessionCommand.Pointer(
                 event.action,
                 generation,
-                event.x,
-                event.y,
+                (viewport.left + event.x / viewportWidth / viewport.scale) * viewportWidth,
+                (viewport.top + event.y / viewportHeight / viewport.scale) * viewportHeight,
                 event.button,
                 viewportWidth,
                 viewportHeight,
@@ -339,6 +348,12 @@ class SessionClient(
                         sourceEpoch = selected.getLong("source_epoch")
                         val requestId = response.getLong("request_id")
                         mainHandler.post { onSourceSelected(selected, requestId) }
+                    }
+                    "zoom_selected" -> {
+                        val selected = response.getJSONObject("selected")
+                        sourceEpoch = selected.getLong("source_epoch")
+                        val requestId = response.getLong("request_id")
+                        mainHandler.post { onZoomSelected(selected, requestId) }
                     }
                     "source_ready_ack" -> {
                         val epoch = response.getLong("source_epoch")

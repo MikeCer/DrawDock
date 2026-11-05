@@ -34,8 +34,10 @@ Successful authentication returns:
   ],
   "selected": {
     "source":{"name":"\\\\.\\DISPLAY2","left":0,"top":0,"right":2560,"bottom":1440,"primary":true},
-    "source_epoch":1
+    "source_epoch":1,
+    "zoom":{"scale":1,"left":0,"top":0}
   },
+  "shared_zoom":true,
   "video_token":"<fresh 32-hex session video token>",
   "remembered_device":{"id":"<device ID>","token":"<reconnect credential>"}
 }
@@ -72,6 +74,40 @@ requires reconnection.
 
 `{"type":"heartbeat"}` carries no coordinates or epoch and receives no response.
 The client sends it when idle to maintain the control lease.
+
+## Shared viewport zoom
+
+`shared_zoom: true` in `paired` advertises the additive zoom capability.
+Clients must not offer a tablet-only substitute when it is absent. `selected`
+metadata includes `zoom: {scale,left,top}`; old hosts without it imply the
+identity viewport for ordinary drawing.
+
+```json
+{"type":"set_zoom","request_id":1000000002,"source_epoch":2,"zoom":{"scale":2,"left":0.25,"top":0.25}}
+```
+
+`scale` must be finite and in `[1,4]`; normalized `left`/`top` must be finite,
+nonnegative and at most `1-1/scale` (with floating-point comparison tolerance).
+The object contains exactly those three fields. At 100%, offsets are zero.
+This command requires ready video geometry and a correlated `request_id`,
+and is permitted in either Draw or Pointer mode.
+
+The host releases buttons, clears the transient laser and cancels any commit
+transaction. After Windows has applied the viewport, it advances the epoch and
+returns `zoom_selected` with `request_id` and `selected` metadata, including the
+actual pixel-quantized viewport. Capture restarts under the new epoch. The client
+must wait for a rendered matching video frame and `source_ready_ack` before
+allowing new input or sending its next coalesced zoom target. A rejection or
+timeout is explicit; Android disconnects if a submitted zoom fails.
+
+All annotation, selection, transform, laser and Pointer wire coordinates remain
+in the canonical full-monitor space, not the zoomed viewport. The client maps
+visible point `(u,v)` to `(left+u/scale,top+v/scale)` and new widths to
+`visible_width/scale` before enqueueing. Source epochs prevent old coordinates
+from being interpreted under a replacement view.
+
+Zoom is session presentation state, not undoable scene data. Monitor switching
+and session teardown reset it to identity. Clear/history do not change it.
 
 ## Annotation objects
 

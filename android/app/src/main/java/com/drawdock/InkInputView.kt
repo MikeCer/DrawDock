@@ -106,6 +106,11 @@ class InkInputView(context: Context) : View(context) {
     var onRequestText: ((Float, Float) -> Unit)? = null
     var onLaser: ((Boolean, Float, Float, Int) -> Unit)? = null
     var onMessage: ((String) -> Unit)? = null
+    var navigationEnabled = false
+    var navigationViewport = SharedViewport()
+    var onNavigate: ((SharedViewport) -> Unit)? = null
+    private var navigation: TwoFingerNavigation? = null
+    private var navigationConsumed = false
     private val holdTimer = Runnable {
         if (reducer.currentPointerId != null && hold.takeLongPress(SystemClock.uptimeMillis())) openPenMenu()
     }
@@ -204,8 +209,59 @@ class InkInputView(context: Context) : View(context) {
         invalidate()
     }
 
+    private fun handleNavigation(event: MotionEvent): Boolean {
+        val action = event.actionMasked
+        if (action == MotionEvent.ACTION_DOWN) {
+            navigation = null
+            navigationConsumed = false
+        }
+        if (action == MotionEvent.ACTION_CANCEL) {
+            val consumed = navigationConsumed
+            navigation = null
+            navigationConsumed = false
+            return consumed
+        }
+        if (event.pointerCount > 2 || !navigationEnabled) navigation = null
+        if (!navigationConsumed && navigationEnabled && inputReady && remoteVideoVisible &&
+            action == MotionEvent.ACTION_POINTER_DOWN && event.pointerCount == 2 &&
+            reducer.currentPointerId == null &&
+            (0..1).all { event.getToolType(it) == MotionEvent.TOOL_TYPE_FINGER }
+        ) {
+            cancelActiveContact()
+            navigationConsumed = true
+            navigation = TwoFingerNavigation(event.getPointerId(0), event.getPointerId(1),
+                navigationViewport, event.getX(0) to event.getY(0), event.getX(1) to event.getY(1),
+                width, height)
+        }
+        val gesture = navigation
+        if (gesture != null && action in listOf(MotionEvent.ACTION_MOVE, MotionEvent.ACTION_POINTER_UP)) {
+            val first = event.findPointerIndex(gesture.firstId)
+            val second = event.findPointerIndex(gesture.secondId)
+            if (first >= 0 && second >= 0 &&
+                event.getToolType(first) == MotionEvent.TOOL_TYPE_FINGER &&
+                event.getToolType(second) == MotionEvent.TOOL_TYPE_FINGER) {
+                onNavigate?.invoke(gesture.update(event.getX(first) to event.getY(first),
+                    event.getX(second) to event.getY(second)))
+            }
+        }
+        if (action == MotionEvent.ACTION_POINTER_UP) navigation = null
+        val consumed = navigationConsumed
+        if (action == MotionEvent.ACTION_UP) {
+            navigation = null
+            navigationConsumed = false
+        }
+        return consumed
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        navigation = null
+        cancelActiveContact()
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
+        if (handleNavigation(event)) return true
         if (action == MotionEvent.ACTION_CANCEL) {
             cancelActiveContact()
             return true

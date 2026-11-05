@@ -263,6 +263,7 @@ pub fn run_server(
                     "type": "paired", "version": 2, "sources": Output::enumerate()?,
                     "selected": selected, "video_token": video_token,
                     "remembered_device": credential,
+                    "shared_zoom": true,
                 }),
             )?;
             stream
@@ -277,7 +278,9 @@ pub fn run_server(
                 Arc::clone(&source),
                 video.running(),
             );
+            let reset_zoom = crate::source::apply_zoom(&source, crate::zoom::Viewport::default());
             drop(video);
+            reset_zoom?;
             result
         })();
         let release_result = input.release_all();
@@ -401,6 +404,7 @@ fn serve_authenticated(
                     .into_iter()
                     .find(|output| output.name == name)
                     .ok_or("selected monitor is no longer available")?;
+                crate::source::apply_zoom(&source, crate::zoom::Viewport::default())?;
                 input.select_output(OutputBounds {
                     left: output.left,
                     top: output.top,
@@ -427,6 +431,32 @@ fn serve_authenticated(
                 ));
             }
             require_ready(command, source_ready)?;
+            if command == "set_zoom" {
+                let request_id = message["request_id"]
+                    .as_u64()
+                    .ok_or("zoom request id missing")?;
+                let view: crate::zoom::Viewport =
+                    serde_json::from_value(message["zoom"].clone())
+                        .map_err(|e| format!("invalid zoom viewport: {e}"))?;
+                view.validate()?;
+                input.release_all()?;
+                scene
+                    .lock()
+                    .map_err(|_| "scene lock poisoned")?
+                    .clear_laser();
+                transaction = None;
+                crate::source::apply_zoom(&source, view)?;
+                let mut selected = source.lock().map_err(|_| "source lock poisoned")?;
+                selected.epoch = selected
+                    .epoch
+                    .checked_add(1)
+                    .ok_or("source epoch exhausted")?;
+                source_ready = false;
+                return Ok(Some(json!({
+                    "type": "zoom_selected", "request_id": request_id,
+                    "selected": selected.metadata()
+                })));
+            }
             process_command(&message, &scene, input, &mut transaction)
         })();
         let response = match response {
@@ -460,6 +490,7 @@ fn require_ready(command: &str, ready: bool) -> Result<(), String> {
                 | "clear"
                 | "clear_display"
                 | "set_mode"
+                | "set_zoom"
         )
     {
         return Err("input suspended until the selected video geometry is acknowledged".into());
@@ -1008,6 +1039,7 @@ mod tests {
             "clear",
             "clear_display",
             "set_mode",
+            "set_zoom",
         ] {
             assert!(require_ready(command, false).is_err());
             require_ready(command, true).unwrap();

@@ -8,6 +8,8 @@ mod trust;
 mod video;
 mod windows_input;
 mod windows_overlay;
+mod windows_zoom;
+mod zoom;
 
 use dd_scene::{Scene, SceneFixture};
 use serde_json::json;

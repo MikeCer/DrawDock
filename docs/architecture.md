@@ -17,6 +17,7 @@ Paths below are relative to the repository root.
 | `apps\dd-host\src\raster.rs` | Generated SVG, Windows font lookup, resvg rasterization and BGRA conversion |
 | `apps\dd-host\src\session.rs` | TLS control service, authentication, protocol dispatch, source barriers and commit transactions |
 | `apps\dd-host\src\source.rs` | Selected output geometry and source epoch |
+| `apps\dd-host\src\zoom.rs` / `windows_zoom.rs` | Bounded shared viewport geometry and native per-monitor magnifier ownership |
 | `apps\dd-host\src\windows_input.rs` | Pointer generations, mode policy, held-button tracking and Win32 `SendInput` |
 | `apps\dd-host\src\trust.rs` | Persistent TLS identity, DPAPI registry and device revocation |
 | `apps\dd-host\src\pairing_window.rs` | Native QR invitation and local approval UI |
@@ -61,6 +62,28 @@ selected-output coordinates to the complete Windows virtual desktop.
 An object's original points remain unchanged by editing. A normalized affine
 matrix records the edit; the renderer converts it to physical pixel geometry.
 Circle bounds and rotations account for output aspect ratio.
+
+Shared zoom leaves that canonical coordinate space unchanged. For normalized
+source point `(x,y)`, the visible point is
+`((x-left)*scale, (y-top)*scale)`. Android applies the inverse to new annotation,
+laser and Pointer coordinates and divides new stroke widths by `scale`.
+Selection frames use `viewport * object_transform`; submitted absolute edits
+are converted back with `inverse(viewport) * edited_frame_transform`.
+
+The presenter owns a click-through, nonactivating layered host and native
+Magnifier child on the selected monitor. It includes the original annotation
+overlay beneath it but excludes its own host from the magnification source,
+preventing recursive capture. GDI capture sees the composed magnified desktop,
+so both physical output and tablet video share the same view. Native source
+origins are quantized to physical pixels and acknowledged back to Android.
+No global fullscreen magnification, UIAccess or accessibility setting is used.
+
+The TLS worker submits a bounded zoom request to the presenter and waits for
+its acknowledgement before advancing the source epoch/restarting capture.
+New input waits for matching rendered video and `source_ready`. Continuous
+gesture targets coalesce on Android while a view transition is pending.
+Session teardown and monitor switching synchronously remove the magnifier;
+the owning window is also destroyed on presenter exit/process termination.
 
 ## Scene, history and session state
 

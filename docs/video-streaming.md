@@ -52,7 +52,7 @@ Failure is explicit, not a silent fallback to a different encoder.
 ## Backpressure and cleanup
 
 An access unit is bounded to 8 MiB. The pending encoded queue holds one unit.
-The capture reader waits up to 100 ms for ordered handoff and checks
+The capture reader waits up to 500 ms for ordered handoff and checks
 cancellation; socket writes have a 500-ms deadline.
 
 Never discard an arbitrary dependent H.264 unit to free a slot: later frames
@@ -78,7 +78,7 @@ Both Android sockets enable TCP_NODELAY, matching the host sockets. The tablet
 disables monitor changes until the current source renders and acknowledges
 readiness. Readiness has a 10-second deadline; a video failure ends the control
 session and exposes reconnect controls rather than leaving a Loading screen.
-The existing 100 ms encoded-frame handoff and 500 ms socket-write bounds still
+The 500 ms encoded-frame handoff and 500 ms socket-write bounds still
 fail explicitly on congestion; no automatic video recovery or adaptive bitrate
 is implemented.
 

@@ -494,12 +494,40 @@ unsafe fn show_layered_window(
     }
     println!("Overlay visible. Use Ctrl+C here or close this process to stop.");
     let mut switched = false;
+    let mut magnifier: Option<crate::windows_zoom::Magnifier> = None;
     loop {
         if let Some(source) = selected_source {
-            let selected = source.lock().map_err(|_| "source lock is poisoned")?;
+            let mut selected = source.lock().map_err(|_| "source lock is poisoned")?;
             if selected.output.name != output.name {
                 switched = true;
                 break;
+            }
+            if let Some(request) = selected.pending_zoom.take() {
+                let view = request.view.for_pixels(width, height);
+                let result = if view.scale == 1.0 {
+                    magnifier = None;
+                    Ok(view)
+                } else {
+                    match &mut magnifier {
+                        Some(mag) => mag.set_view(view).map(|()| view),
+                        None => crate::windows_zoom::Magnifier::create(output, view).map(|mag| {
+                            magnifier = Some(mag);
+                            view
+                        }),
+                    }
+                };
+                if let Ok(view) = result.as_ref() {
+                    selected.zoom = *view;
+                } else {
+                    // Fail closed to an unmagnified desktop, never retain a partial transform.
+                    magnifier = None;
+                    selected.zoom = crate::zoom::Viewport::default();
+                }
+                if request.reply.send(result).is_err() {
+                    magnifier = None;
+                    selected.zoom = crate::zoom::Viewport::default();
+                    eprintln!("Zoom request expired before the Windows presenter replied.");
+                }
             }
         }
         // SAFETY: message is a writable MSG and null hwnd receives all thread messages.
@@ -566,7 +594,11 @@ unsafe fn show_layered_window(
                 return Err(last_error("UpdateLayeredWindow(scene update)"));
             }
         }
+        if let Some(mag) = &magnifier {
+            mag.refresh()?;
+        }
     }
+    drop(magnifier);
     THREAD_ID.store(0, Ordering::Relaxed);
     unsafe {
         SetConsoleCtrlHandler(Some(console_control), 0);

@@ -71,6 +71,11 @@ class MainActivity : ComponentActivity() {
     private var selectedTool = DrawTool.FREEHAND
     private var selectedColor = Color.RED
     private var selectedWidth = 6f
+    private var sharedZoomSupported = false
+    private var viewport = SharedViewport()
+    private var pendingZoomRequestId: Long? = null
+    private var zoomChanging = false
+    private var queuedZoom: SharedViewport? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -205,7 +210,13 @@ class MainActivity : ComponentActivity() {
         inputView.onMessage = { notifyDrawing(it) }
         inputView.onLongPress = { x, y -> showRadialMenu(x + inputView.left, y + inputView.top) }
         inputView.onSelect = { x, y ->
-            sendEditor(JSONObject().put("type", "select_object").put("x", x.toDouble()).put("y", y.toDouble()))
+            val point = viewport.source(x, y)
+            sendEditor(JSONObject().put("type", "select_object")
+                .put("x", point.first.toDouble()).put("y", point.second.toDouble()))
+        }
+        inputView.onNavigate = { view ->
+            queuedZoom = view
+            dispatchZoom()
         }
         inputView.onTransform = { id, transform -> sendTransform(id, transform) }
         inputView.onRequestText = { x, y -> requestText(x, y) }
@@ -371,11 +382,58 @@ class MainActivity : ComponentActivity() {
             radialAction("Clear\nall", R.drawable.ic_dd_clear_all, "Clear all annotations on tablet and PC") {
                 confirmRemoteClear()
             }.copy(danger = true),
+            RadialMenuView.Item("Zoom", R.drawable.ic_dd_zoom_in,
+                "Shared desktop zoom, ${(viewport.scale * 100).toInt()} percent") { zoomPage() },
             radialAction("Settings", R.drawable.ic_dd_settings, "Connection settings") {
                 toolsMenu.visibility = View.VISIBLE
                 menuButton.text = "Hide settings"
             },
         ), ::radialRoot)
+    }
+
+    private fun zoomPage() {
+        refreshRadialPage = ::zoomPage
+        radialMenu.page(listOf(
+            radialAction("Zoom in", R.drawable.ic_dd_zoom_in) { requestZoom(
+                viewport.navigate(1.25f, .5f, .5f, .5f, .5f)) },
+            radialAction("Zoom out", R.drawable.ic_dd_zoom_out) { requestZoom(
+                viewport.navigate(.8f, .5f, .5f, .5f, .5f)) },
+            radialAction("Reset\n100%", R.drawable.ic_dd_zoom_reset, "Reset shared zoom to 100 percent") {
+                requestZoom(SharedViewport())
+            },
+        ), ::morePage)
+    }
+
+    private fun requestZoom(view: SharedViewport) {
+        if (!sharedZoomSupported) {
+            notifyDrawing("Shared zoom requires the updated Windows host.")
+            return
+        }
+        if (!editorReady()) { notifyDrawing("Wait until the PC screen is ready."); return }
+        queuedZoom = view
+        dispatchZoom()
+    }
+
+    private fun dispatchZoom() {
+        if (!editorReady() || !sharedZoomSupported) return
+        val view = queuedZoom ?: return
+        queuedZoom = null
+        if (view == viewport) return
+        val client = sessionClient ?: return
+        inputView.cancelActiveContact()
+        inputView.selection = null
+        val request = client.zoom(view)
+        if (request == null) { notifyDrawing("Zoom command was not queued."); return }
+        pendingZoomRequestId = request
+        zoomChanging = true
+        screenSelector.isEnabled = false
+        refreshInputReady()
+        statusText.text = "Updating shared zoom..."
+        workspace.postDelayed({
+            if (sessionClient === client && pendingZoomRequestId == request) {
+                failVideo("Zoom was not acknowledged; reconnect required.")
+            }
+        }, 10_000)
     }
 
     private fun pickTool(tool: DrawTool) {
@@ -402,7 +460,8 @@ class MainActivity : ComponentActivity() {
 
     private fun editorReady() =
         sessionActive && readyEpoch == sourceEpoch && !videoFailed && pendingSourceRequestId == null &&
-            pendingEditorRequestId == null && pendingClearRequestId == null && pendingModeRequestId == null
+            pendingEditorRequestId == null && pendingClearRequestId == null && pendingModeRequestId == null &&
+            pendingZoomRequestId == null && !zoomChanging
 
     private fun sendEditor(message: JSONObject): Boolean {
         if (!editorReady()) { notifyDrawing("Connect and wait until the PC screen is ready."); return false }
@@ -426,7 +485,7 @@ class MainActivity : ComponentActivity() {
 
     private fun sendTransform(id: Long, transform: Affine2D): Boolean =
         sendEditor(JSONObject().put("type", "transform_object").put("object_id", id)
-            .put("transform", transformJson(transform)))
+            .put("transform", transformJson(viewport.matrix.inverse() * transform)))
 
     private fun mirror(horizontal: Boolean) {
         val selected = inputView.selection
@@ -440,6 +499,10 @@ class MainActivity : ComponentActivity() {
         if (response.optLong("source_epoch", -1) != sourceEpoch) return
         val request = response.optLong("request_id", -1)
         if (response.optString("type") == "error") {
+            if (pendingZoomRequestId == request) {
+                failVideo("Shared zoom failed: ${response.optString("message")}. Reconnect required.")
+                return
+            }
             if (pendingEditorRequestId == request) {
                 pendingEditorRequestId = null
                 inputView.cancelSelectionPreview()
@@ -463,7 +526,7 @@ class MainActivity : ComponentActivity() {
                 EditorSelection(it.getLong("id"), EditorBounds(
                     bounds.getDouble("left").toFloat(), bounds.getDouble("top").toFloat(),
                     bounds.getDouble("right").toFloat(), bounds.getDouble("bottom").toFloat()),
-                    Affine2D(matrix.getDouble("a").toFloat(), matrix.getDouble("b").toFloat(),
+                    viewport.matrix * Affine2D(matrix.getDouble("a").toFloat(), matrix.getDouble("b").toFloat(),
                         matrix.getDouble("c").toFloat(), matrix.getDouble("d").toFloat(),
                         matrix.getDouble("tx").toFloat(), matrix.getDouble("ty").toFloat()),
                     EditorBounds(local.getDouble("left").toFloat(), local.getDouble("top").toFloat(),
@@ -585,18 +648,28 @@ class MainActivity : ComponentActivity() {
         inputView.setInputReady(
             sessionClient == null || (sessionActive && readyEpoch == sourceEpoch && !videoFailed &&
                 pendingModeRequestId == null && pendingClearRequestId == null &&
-                pendingSourceRequestId == null && pendingEditorRequestId == null),
+                pendingSourceRequestId == null && pendingEditorRequestId == null &&
+                pendingZoomRequestId == null && !zoomChanging),
         )
+        inputView.navigationEnabled = sessionActive && sharedZoomSupported && !videoFailed
     }
 
-    private fun applySelectedSource(selected: JSONObject) {
+    private fun applySelectedSource(selected: JSONObject, zoomOnly: Boolean = false) {
+        val zoom = selected.optJSONObject("zoom")
+        viewport = if (zoom == null) SharedViewport() else SharedViewport(
+            zoom.getDouble("scale").toFloat(), zoom.getDouble("left").toFloat(), zoom.getDouble("top").toFloat())
+        sessionClient?.viewport = viewport
+        inputView.navigationViewport = viewport
+        if (!zoomOnly) queuedZoom = null
         sourceEpoch = selected.getLong("source_epoch")
         sourceName = selected.getJSONObject("source").getString("name")
         readyEpoch = null
         pendingReadyEpoch = null
         pendingEditorRequestId = null
-        blackboard = false
-        grid = false
+        if (!zoomOnly) {
+            blackboard = false
+            grid = false
+        }
         radialMenu.dismiss()
         inputView.clear()
         inputView.setInputReady(false)
@@ -876,6 +949,12 @@ class MainActivity : ComponentActivity() {
                         connectionButtonSafeText("Disconnect")
                         screenSelector.isEnabled = readyEpoch == sourceEpoch && pendingSourceRequestId == null
                     } else {
+                        queuedZoom = null
+                        pendingZoomRequestId = null
+                        zoomChanging = false
+                        viewport = SharedViewport()
+                        inputView.navigationEnabled = false
+                        inputView.navigationViewport = viewport
                         inputView.setInputReady(false)
                         inputView.drawMode = true
                         pendingModeRequestId = null
@@ -954,6 +1033,7 @@ class MainActivity : ComponentActivity() {
             onSourceReady = { epoch ->
                 if (generation == sessionGeneration && epoch == sourceEpoch) {
                     readyEpoch = epoch
+                    zoomChanging = false
                     pendingReadyEpoch = null
                     inputView.remoteVideoVisible = true
                     screenSelector.isEnabled = true
@@ -961,6 +1041,7 @@ class MainActivity : ComponentActivity() {
                     toolsMenu.visibility = View.GONE
                     menuButton.text = "Settings"
                     statusText.text = "Live $sourceName - ${videoWidth}x$videoHeight H.264 / included host ink"
+                    dispatchZoom()
                 }
             },
             onVideoGeometry = { epoch, width, height ->
@@ -991,6 +1072,19 @@ class MainActivity : ComponentActivity() {
             onRemembered = { id, credential ->
                 val pin = fingerprint.replace(":", "").replace(" ", "").lowercase()
                 rememberedHostStore.save(RememberedHost(host, port, pin, id, credential))
+            },
+            onZoomCapability = { supported ->
+                if (generation == sessionGeneration) {
+                    sharedZoomSupported = supported
+                    refreshInputReady()
+                }
+            },
+            onZoomSelected = { selected, requestId ->
+                if (generation == sessionGeneration && requestId == pendingZoomRequestId) {
+                    pendingZoomRequestId = null
+                    applySelectedSource(selected, zoomOnly = true)
+                    statusText.text = "Loading shared zoom ${(viewport.scale * 100).toInt()}%..."
+                }
             },
         )
         sessionClient = client
@@ -1051,6 +1145,13 @@ class MainActivity : ComponentActivity() {
         pendingReadyEpoch = null
         pendingSourceRequestId = null
         pendingEditorRequestId = null
+        pendingZoomRequestId = null
+        zoomChanging = false
+        queuedZoom = null
+        sharedZoomSupported = false
+        viewport = SharedViewport()
+        inputView.navigationViewport = viewport
+        inputView.navigationEnabled = false
         blackboard = false
         grid = false
         if (::radialMenu.isInitialized) radialMenu.dismiss()

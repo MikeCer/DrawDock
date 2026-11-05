@@ -17,6 +17,8 @@ use std::{
 
 const MAX_ACCESS_UNIT: usize = 8 * 1024 * 1024;
 const FPS: u32 = 30;
+// Decoder recreation on zoom/source changes can briefly stall the TLS consumer.
+const FRAME_HANDOFF_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Copy, Debug)]
 pub enum VideoEncoder {
@@ -389,7 +391,7 @@ fn send_frame(
     frame: Vec<u8>,
     stopped: &AtomicBool,
 ) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_millis(100);
+    let deadline = Instant::now() + FRAME_HANDOFF_TIMEOUT;
     let mut pending = Ok(frame);
     loop {
         if stopped.load(Ordering::Acquire) {
@@ -401,7 +403,7 @@ fn send_frame(
             Err(mpsc::TrySendError::Full(frame)) => pending = frame,
         }
         if Instant::now() >= deadline {
-            return Err("encoded video handoff exceeded 100 ms; reconnect from a keyframe".into());
+            return Err("encoded video handoff exceeded 500 ms; reconnect from a keyframe".into());
         }
         thread::sleep(Duration::from_millis(1));
     }
@@ -518,6 +520,7 @@ mod tests {
             send_frame(&sender, vec![2], &stop).unwrap();
             send_frame(&sender, vec![3], &stop).unwrap();
         });
+        thread::sleep(Duration::from_millis(150));
         for expected in [1, 2, 3] {
             assert_eq!(
                 receiver
@@ -537,7 +540,7 @@ mod tests {
         assert!(
             send_frame(&sender, vec![2], &AtomicBool::new(false))
                 .unwrap_err()
-                .contains("100 ms")
+                .contains("500 ms")
         );
         assert!(
             send_frame(&sender, vec![2], &AtomicBool::new(true))

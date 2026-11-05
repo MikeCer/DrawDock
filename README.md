@@ -11,6 +11,8 @@ The drawing workspace includes a pen-long-press radial menu, freehand and
 geometric shapes, text, image paste from the tablet clipboard, single-object
 transformations, a laser pointer, highlighter, blackboard and grid. Pointer mode
 lets the pen control the Windows mouse.
+Shared 100-400% desktop/annotation zoom supports two-finger pinch/pan and menu
+controls on both the selected PC output and tablet.
 
 The desktop application runs natively on Windows, without WSL, Linux or Docker.
 USB uses an explicit ADB reverse mapping; private-network connections use an

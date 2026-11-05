@@ -129,6 +129,15 @@ No new runtime dependency, Compose migration or external graphics path is
 required. Annotation palette, host scene rendering, selection handles and
 canvas gesture handling remain independent of menu styling.
 
+More also contains Zoom, with a labeled Zoom in / Zoom out / Reset submenu.
+Its `ic_dd_zoom_in`, `ic_dd_zoom_out` and `ic_dd_zoom_reset` vectors are
+component-owned additions: the supplied kit contains no zoom artwork.
+They follow the existing white 24 px, 2 px-outline icon vocabulary and receive
+the same tint, label, focus feedback and scalable targets as other actions.
+The Zoom entry reports the acknowledged percentage in its accessible
+description; the icon alone is not the state indicator. See
+[shared zoom and pan](features.md#shared-zoom-and-pan) for functional behavior.
+
 ## App chrome and dialogs
 
 `Theme.DrawDock` is a native Views theme with the same navy surfaces, cyan

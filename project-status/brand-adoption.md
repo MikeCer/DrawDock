@@ -202,6 +202,83 @@ No implementation repair was required. The API 30 runtime and optional
 monochrome-artwork limitations remain as recorded above. Stopped for owner
 visual review without creating a commit.
 
+## Milestone 5: shared zoom and final UX acceptance
+
+**PARTIAL: shared zoom is implemented, built and installed; automated device
+checks PASS. Physical-pen/fullscreen/projector and final accessibility acceptance
+remain pending owner review. No commit was created.**
+
+The owner approved shared desktop/annotation zoom, two-finger pinch/pan and
+menu Zoom in / Zoom out / Reset, bounded to 100-400%. Reset is 100%;
+monitor changes and disconnect reset zoom; Clear/Undo do not change it.
+
+The native Windows presenter now owns a monitor-scoped Magnifier control,
+including the original desktop/annotation overlay and excluding its own
+presentation window. An isolated known-pattern feasibility probe passed 48/48
+interior pixel checks before implementation. This is not tablet-only video
+scaling, global Windows Magnifier configuration or an application zoom shortcut.
+No elevation, UIAccess, accessibility settings, firewall or trust changes were
+required.
+
+The host acknowledges a pixel-quantized viewport, advances the source epoch and
+restarts capture. Android waits for matching rendered video/readiness before
+new pen input and coalesces gesture targets during transitions. Canonical scene
+geometry is unchanged: new marks/widths, laser, Pointer and affine editing
+coordinates pass through the inverse viewport. Navigation cancels on workspace
+size changes. The Zoom submenu uses three new component-owned vectors following
+the existing icon vocabulary; no suitable zoom artwork exists in the kit.
+
+Testing exposed the previous 100 ms encoded-frame handoff as too short during
+decoder recreation. Its bounded allowance is now 500 ms, still with one queued
+frame and no arbitrary dropping of dependent H.264 frames. The ordered-handoff
+test now includes a 150 ms consumer stall; stop/timeout checks remain.
+
+### Automated Windows/API 36 results
+
+| Check | Result and evidence |
+|---|---|
+| Rust | PASS: `cargo test --workspace`, 47 passed / 2 ignored; Clippy with `-D warnings`, host build and formatting pass |
+| Android | PASS: `testDebugUnitTest assembleDebug lintDebug`; 38 JVM tests, zero failures/errors; lint zero errors / 62 warnings (three new status-string translation warnings follow existing inline-string usage) |
+| Private-LAN TLS | PASS: actual remembered tablet session over `192.168.1.16` to `192.168.1.32`; ADB drives tests/installation only |
+| Shared presentation | PASS: desktop GDI capture and actual tablet screenshots agree at 36/36 interior samples each for baseline, 125% menu zoom, pinch, pan and zoomed Blackboard/highlighter |
+| Navigation isolation | PASS: injected two-finger gestures navigate the shared view; single-finger motion neither changes zoom nor pans |
+| Zoomed pen/editing | PASS: injected stylus rectangle, rotated selection/reselection, fixed-anchor resize and enlarged pen handle target |
+| Tablet Pointer | PASS: zoomed pen target maps to the expected underlying Windows desktop position, including negative monitor origin |
+| Canvas/history | PASS on final installed APK: Blackboard remains enabled/physically black across zoom; new highlighter ink aligns; Clear/Undo preserve zoom and restore canvas/ink |
+| Limits/menu | PASS: Zoom in reaches/stays at 400%, Zoom out decreases it, Reset removes magnification |
+| Lifecycle | PASS: monitor switch resets crop, returning starts at 100%; disconnect removes the native magnifier; remembered reconnect starts at 100% |
+
+An earlier Pointer assertion sampled the PC cursor before asynchronous network
+delivery completed. Waiting for delivery fixes the harness; the final check
+passes without changing production Pointer logic. Screenshots, recordings,
+`zoom-probe-results.json`, `zoom-device-results.json`,
+`zoom-scene-results.json` and selection results are session-local evidence,
+not shipped runtime assets.
+The final APK remains installed. Temporary tablet injector/XML files and local
+class/dex scratch directories were removed. The test host is stopped, with no
+listener, magnifier or known-pattern fixture window remaining.
+
+### Remaining acceptance and limitations
+
+The device tests use injected stylus/touch input on the actual tablet and
+captured Windows output. They do **not** substitute for the owner's physical pen,
+natural multi-touch, direct monitor/projector observation or fullscreen
+presentation acceptance. Live laser-hover ergonomics, mixed pen/palm sequences,
+latency/soak, capture-revision handoff, rotation during a gesture, TalkBack and
+small-window scrolling remain unverified. Zoom was tested over private LAN;
+USB's unchanged TLS transport was not rerun for this milestone.
+
+The physical PC mouse is intentionally not intercepted/remapped while zoomed;
+use tablet Pointer mode or Reset to 100% before clicking controls with that
+mouse. Gesture updates can have visible capture/decoder turnaround rather than
+continuous local-only animation. Secure desktop, protected content and exclusive
+fullscreen behavior retain existing Windows overlay/capture limitations.
+
+API 30 runtime acceptance is BLOCKED by the absence of an API 30 device/image;
+no system-wide installation was performed. Illustrated onboarding is deferred.
+Linux/GNOME and QUIC remain DEFERRED. Stop here for owner testing and optional
+commit; do not mark the mandatory physical Windows annotation acceptance PASS.
+
 ## Owner-gated milestone plan
 
 | Milestone | Scope | Gate |
@@ -209,5 +286,6 @@ visual review without creating a commit.
 | 2 | Android Views radial-menu tokens, icons and visual states | Committed by owner as `84bbbd2` with milestone 3 |
 | 3 | Header/settings and dialogs; preserve canvas rendering | Committed by owner as `84bbbd2`; owner approved milestone 4 |
 | 4 | Adaptive launcher and API-compatible system splash | Owner committed `aa523cb`; post-crash rebuild/device checks pass on API 36; API 30 runtime unverified |
+| 5 | Shared desktop/annotation zoom, pinch/pan and menu controls; final UX/accessibility acceptance | Implemented and installed; automated checks PASS; PARTIAL pending owner physical/fullscreen/accessibility acceptance; uncommitted |
 
 Do not roll these milestones into one change or create commits automatically.
