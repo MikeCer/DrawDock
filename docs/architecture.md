@@ -138,9 +138,11 @@ laser, saves/restores the relevant scene, moves the overlay and restarts capture
 The source epoch advances. New input waits until Android renders the matching
 video geometry and completes `source_ready`.
 
-Disconnect, lease expiry and session failure release input and discard session
-scenes/history. Remembered device trust survives these operations; drawings do
-not persist across connections.
+Disconnect, lease expiry and session failure release input and discard host
+session scenes/history. Android retains completed objects/canvas in private
+per-host/per-monitor recovery documents, saved before transmission. Authenticated
+atomic restoration starts new history and requires matching video readiness.
+Remembered trust survives separately. See [recovery](features.md#clear-history-and-lifecycle).
 
 ## Video and ink
 

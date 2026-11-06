@@ -1,0 +1,33 @@
+{
+  "type": "excalidraw", "version": 2, "source": "DrawDock",
+  "appState": {"viewBackgroundColor": "#ffffff"}, "files": {},
+  "elements": [
+    {"id":"title","type":"text","x":40,"y":20,"width":1160,"height":70,"text":"Completed stroke | from tablet contact to physical ink","fontSize":28,"fontFamily":2,"strokeColor":"#000000"},
+    {"id":"tablet","type":"rectangle","x":40,"y":150,"width":530,"height":630,"strokeColor":"#1864ab","backgroundColor":"transparent","strokeWidth":2,"roundness":{"type":3}},
+    {"id":"tablet-title","type":"text","x":60,"y":175,"width":490,"height":50,"text":"Android tablet","fontSize":20,"fontFamily":2,"strokeColor":"#000000"},
+    {"id":"host","type":"rectangle","x":680,"y":150,"width":520,"height":630,"strokeColor":"#2f9e44","backgroundColor":"transparent","strokeWidth":2,"roundness":{"type":3}},
+    {"id":"host-title","type":"text","x":700,"y":175,"width":480,"height":50,"text":"Rust Windows host","fontSize":20,"fontFamily":2,"strokeColor":"#000000"},
+    {"id":"pen","type":"rectangle","x":60,"y":250,"width":490,"height":100,"strokeColor":"#1864ab","backgroundColor":"#a5d8ff","fillStyle":"solid","roundness":{"type":3},"boundElements":[{"type":"text","id":"pen-text"}]},
+    {"id":"pen-text","type":"text","x":70,"y":260,"width":470,"height":80,"text":"MotionEvent / InputReducer / InkInputView\nOne stylus owner; historical XY; immediate local preview","fontSize":16,"fontFamily":2,"strokeColor":"#000000","containerId":"pen","textAlign":"center","verticalAlign":"middle"},
+    {"id":"save","type":"rectangle","x":60,"y":420,"width":490,"height":100,"strokeColor":"#1864ab","backgroundColor":"#a5d8ff","fillStyle":"solid","roundness":{"type":3},"boundElements":[{"type":"text","id":"save-text"}]},
+    {"id":"save-text","type":"text","x":70,"y":430,"width":470,"height":80,"text":"Complete geometry on lift / explicit Finish\nAtomic private save before enqueueing mutation","fontSize":16,"fontFamily":2,"strokeColor":"#000000","containerId":"save","textAlign":"center","verticalAlign":"middle"},
+    {"id":"writer","type":"rectangle","x":60,"y":590,"width":490,"height":100,"strokeColor":"#1864ab","backgroundColor":"#a5d8ff","fillStyle":"solid","roundness":{"type":3},"boundElements":[{"type":"text","id":"writer-text"}]},
+    {"id":"writer-text","type":"text","x":70,"y":600,"width":470,"height":80,"text":"SessionClient / bounded ordered SessionOutbox\nPinned TLS; enqueue-time epoch; chunk large commits","fontSize":16,"fontFamily":2,"strokeColor":"#000000","containerId":"writer","textAlign":"center","verticalAlign":"middle"},
+    {"id":"scene","type":"rectangle","x":700,"y":250,"width":480,"height":100,"strokeColor":"#2f9e44","backgroundColor":"#b2f2bb","fillStyle":"solid","roundness":{"type":3},"boundElements":[{"type":"text","id":"scene-text"}]},
+    {"id":"scene-text","type":"text","x":710,"y":260,"width":460,"height":80,"text":"Validate authentication / epoch / mode / limits\nCommit canonical object; advance content revision","fontSize":16,"fontFamily":2,"strokeColor":"#000000","containerId":"scene","textAlign":"center","verticalAlign":"middle"},
+    {"id":"present","type":"rectangle","x":700,"y":420,"width":480,"height":100,"strokeColor":"#2f9e44","backgroundColor":"#b2f2bb","fillStyle":"solid","roundness":{"type":3},"boundElements":[{"type":"text","id":"present-text"}]},
+    {"id":"present-text","type":"text","x":710,"y":430,"width":460,"height":80,"text":"SVG / resvg / layered BGRA presentation\nPhysical monitor shows live desktop + ink","fontSize":16,"fontFamily":2,"strokeColor":"#000000","containerId":"present","textAlign":"center","verticalAlign":"middle"},
+    {"id":"video","type":"rectangle","x":700,"y":590,"width":480,"height":100,"strokeColor":"#2f9e44","backgroundColor":"#b2f2bb","fillStyle":"solid","roundness":{"type":3},"boundElements":[{"type":"text","id":"video-text"}]},
+    {"id":"video-text","type":"text","x":710,"y":600,"width":460,"height":80,"text":"FFmpeg captures included ink and encodes H.264\nSeparate authenticated video connection","fontSize":16,"fontFamily":2,"strokeColor":"#000000","containerId":"video","textAlign":"center","verticalAlign":"middle"},
+    {"id":"finish","type":"arrow","x":305,"y":350,"width":0,"height":70,"points":[[0,0],[0,70]],"strokeColor":"#1864ab","strokeWidth":2,"endArrowhead":"arrow"},
+    {"id":"enqueue","type":"arrow","x":305,"y":520,"width":0,"height":70,"points":[[0,0],[0,70]],"strokeColor":"#1864ab","strokeWidth":2,"endArrowhead":"arrow"},
+    {"id":"commit","type":"arrow","x":550,"y":640,"width":150,"height":340,"points":[[0,0],[80,0],[80,-340],[150,-340]],"strokeColor":"#862e9c","strokeWidth":2,"endArrowhead":"arrow"},
+    {"id":"commit-label","type":"text","x":575,"y":220,"width":105,"height":70,"text":"JSON v2\nXY + style","fontSize":14,"fontFamily":2,"strokeColor":"#000000"},
+    {"id":"render","type":"arrow","x":940,"y":350,"width":0,"height":70,"points":[[0,0],[0,70]],"strokeColor":"#2f9e44","strokeWidth":2,"endArrowhead":"arrow"},
+    {"id":"capture","type":"arrow","x":940,"y":520,"width":0,"height":70,"points":[[0,0],[0,70]],"strokeColor":"#2f9e44","strokeWidth":2,"endArrowhead":"arrow"},
+    {"id":"feedback","type":"arrow","x":940,"y":690,"width":635,"height":160,"points":[[0,0],[0,160],[-635,160],[-635,0]],"strokeColor":"#862e9c","strokeWidth":2,"endArrowhead":"arrow"},
+    {"id":"feedback-label","type":"text","x":405,"y":870,"width":470,"height":40,"text":"MediaCodec / TextureView latches returned PC video","fontSize":16,"fontFamily":2,"strokeColor":"#000000"},
+    {"id":"handoff","type":"rectangle","x":40,"y":940,"width":1160,"height":130,"strokeColor":"#495057","backgroundColor":"#dee2e6","fillStyle":"solid","roundness":{"type":3},"boundElements":[{"type":"text","id":"handoff-text"}]},
+    {"id":"handoff-text","type":"text","x":60,"y":965,"width":1120,"height":80,"text":"Retire provisional ink only after commit_ack AND a safe texture-latched revision watermark\nTablet preview and protocol acknowledgements alone do not prove physical pen-to-display latency","fontSize":16,"fontFamily":2,"strokeColor":"#000000","containerId":"handoff","textAlign":"center","verticalAlign":"middle"}
+  ]
+}

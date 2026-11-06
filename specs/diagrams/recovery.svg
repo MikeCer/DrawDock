@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="1410" viewBox="0 0 1220 1410" role="img" aria-labelledby="title"><title id="title">Drawing recovery | authenticated restoration</title><rect width="100%" height="100%" fill="#ffffff"/><text x="40" y="48" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="28"><tspan x="40" dy="0">Drawing recovery | authenticated restoration</tspan></text>
+<rect x="40" y="150" width="380" height="100" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="230.0" y="196.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="230.0" dy="0">Android tablet</tspan><tspan x="230.0" dy="20.0">Private document + foreground retries</tspan></text>
+<rect x="450" y="150" width="320" height="100" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="610.0" y="196.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="610.0" dy="0">Rust host</tspan><tspan x="610.0" dy="20.0">Authentication + atomic scene</tspan></text>
+<rect x="820" y="150" width="360" height="100" rx="12" fill="#99e9f2" stroke="#0c8599" stroke-width="1.5"/>
+<text x="1000.0" y="196.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="1000.0" dy="0">Physical display / video</tspan><tspan x="1000.0" dy="20.0">Included host annotations</tspan></text>
+<polyline points="230,250 230,1130" fill="none" stroke="#495057" stroke-width="1" stroke-linejoin="round" stroke-dasharray="8 6"/>
+<polyline points="610,250 610,1130" fill="none" stroke="#495057" stroke-width="1" stroke-linejoin="round" stroke-dasharray="8 6"/>
+<polyline points="1000,250 1000,1130" fill="none" stroke="#495057" stroke-width="1" stroke-linejoin="round" stroke-dasharray="8 6"/>
+<rect x="70" y="310" width="320" height="110" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="230.0" y="361.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="230.0" dy="0">Save completed object / canvas</tspan><tspan x="230.0" dy="20.0">Before network enqueue</tspan></text>
+<polyline points="230,460 610,460" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="599.4690092573155,454.24689353674955 610,460 599.4690092573155,465.75310646325045" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<text x="430.0" y="441" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="430.0" dy="0">Authenticated mutation</tspan></text>
+<polyline points="610,530 1000,530" fill="none" stroke="#0c8599" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="989.4690092573155,524.2468935367496 1000,530 989.4690092573155,535.7531064632504" fill="none" stroke="#0c8599" stroke-width="2" stroke-linecap="round"/>
+<text x="805.0" y="511" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="805.0" dy="0">Present + capture</tspan></text>
+<rect x="40" y="580" width="1140" height="110" rx="12" fill="#fff3bf" stroke="#e67700" stroke-width="1.5"/>
+<text x="610.0" y="631.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="610.0" dy="0">Connection lost: host releases input and clears overlay; tablet keeps saved drawing read-only</tspan><tspan x="610.0" dy="20.0">Foreground retries use the same pinned endpoint; USB launcher restores a missing authorized-device tunnel</tspan></text>
+<polyline points="230,760 610,760" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="599.4690092573155,754.2468935367496 610,760 599.4690092573155,765.7531064632504" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<text x="420.0" y="741" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="420.0" dy="0">Pinned resume + initial source_ready</tspan></text>
+<polyline points="230,860 610,860" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="599.4690092573155,854.2468935367496 610,860 599.4690092573155,865.7531064632504" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<text x="420.0" y="841" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="420.0" dy="0">Bounded snapshot / atomic restore</tspan></text>
+<polyline points="610,960 230,960" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="240.53099074268448,965.7531064632504 230,960 240.53099074268448,954.2468935367496" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+<text x="420.0" y="941" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="420.0" dy="0">restore_ack / new source epoch</tspan></text>
+<polyline points="1000,1060 230,1060" fill="none" stroke="#0c8599" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="240.53099074268448,1065.7531064632503 230,1060 240.53099074268448,1054.2468935367497" fill="none" stroke="#0c8599" stroke-width="2" stroke-linecap="round"/>
+<text x="615.0" y="1041" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="615.0" dy="0">New-epoch PC video + source readiness barrier</tspan></text>
+<rect x="70" y="1140" width="320" height="110" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="230.0" y="1191.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="230.0" dy="0">Enable editing after readiness</tspan><tspan x="230.0" dy="20.0">Draw / 100% / new undo history</tspan></text>
+<text x="40" y="1306" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="40" dy="0">Missing identity, monitor or valid document: stop with an error and retain saved work.</tspan><tspan x="40" dy="20.0">Explicit Disconnect stops retries; app-data clearing/uninstall removes local documents.</tspan></text></svg>

@@ -1,210 +1,231 @@
-# DrawDock — Android Stylus Input and Event Handling Specification
+# DrawDock - Android Stylus and Session Specification
 
-Document ID: DD-ANDROID-001 | Version: 0.2 | Date: 2026-11-04  
-Companion: `DrawDock-rust-overlay-architecture.md`.
+Document ID: DD-ANDROID-001 | Version: 0.3 | Updated: 2026-11-06
+Baseline: `v0.1.2` Kotlin client; Android 11/API 30 minimum.
 
-This technical proposal is a design input, not a description of every implemented feature. See [the contributor documentation](../docs/README.md) for the current Windows/Android contract.
+## 1. Purpose and ownership
 
-## 1. Purpose and terminology
+Android receives tablet stylus events, mirrors an existing selected PC monitor
+and sends annotation/pointer commands to the Rust host. This is an ordinary app,
+not a kernel stylus driver, accessibility service or privileged shell server.
+No root or native pressure-aware PC digitizer emulation is implemented.
 
-Implement a normal Android application that receives stylus events, mirrors the selected PC screen, and sends drawing/pointer commands to the Rust backend. “Stylus driver” here means an application-level input adapter and event pipeline, not a kernel driver, custom digitizer firmware, accessibility service or root component. Use Android MotionEvent APIs and existing device drivers [A1,A2].
+The host owns live scene validation and physical presentation. Android owns
+interaction, provisional feedback, video decode and durable recovery documents.
+Tablet-only ink is not successful host annotation. See the
+[product contract](DrawDock-prototype-spec-draft.md),
+[Rust architecture](DrawDock-rust-overlay-architecture.md) and
+[exact protocol](../docs/protocol.md).
 
-Host-visible annotations are mandatory. Immediate tablet ink is feedback, never an acceptable substitute. The Rust backend owns canonical scene state; Android owns responsive local previews and user interaction. Neither Android pressure capture nor eraser tool detection implies pressure-aware Windows/Linux HID emulation.
+## 2. Actual application structure
 
-Minimum Android API: proposed 30 (Android 11). Pin compile/target SDK and library versions at kickoff. Do not raise minimum SDK merely to use newer optional input/rendering features. API 33 cancellation behavior must be feature-gated [A3].
-
-## 2. App modules and UI
-
-```text
-app/              # connection screen, toolbar, lifecycle
-input/            # MotionEvent adapter and pure state machine
-geometry/         # viewport/source transforms and epochs
-protocol/         # generated protobuf + golden fixtures
-session/          # TLS, authorization, reconnect, ordered sends
-render/           # video Surface + transparent local ink layer
-video/            # MediaCodec capabilities and recovery
-metrics/          # local bounded diagnostics, export on request
-```
-
-Use a dedicated custom View for input so stylus MotionEvent details/history are explicit; the surrounding UI may use Compose. Do not perform networking or protobuf work inside onTouchEvent/onHoverEvent. Avoid a full Activity recomposition per point.
-
-Screen includes connection status, active monitor, Draw/Pointer mode, tool, color, width, undo/redo, clear and disconnect. Make active mode unmistakable. Disable contact until authentication, geometry and mode acknowledgment are current. Controls remain operable by finger; finger contact on the drawing viewport does not create ink or PC clicks in the first prototype.
-
-Keep the display awake only during an active foreground session. Use the normal Activity lifecycle; no background input service. Screen capture occurs on the PC, so the tablet does not need MediaProjection. Request only permissions actually needed, including INTERNET; QR camera scanning is optional, not required when a manual invitation can be entered.
-
-## 3. Event extraction contract
-
-For each relevant event, copy primitives immediately; do not retain the framework MotionEvent beyond its dispatch callback unless explicitly obtaining/recycling a copy. Track pointer ID, never assume pointer index is stable [A1].
-
-Capture:
-
-| Field | Meaning |
+| Existing Kotlin file | Responsibility |
 |---|---|
-| pointerId | Current gesture pointer identity, not persistent device identity |
-| toolType | STYLUS, ERASER, FINGER, MOUSE, UNKNOWN |
-| actionMasked/actionIndex | Transition and affected pointer index |
-| x/y | View-local coordinates; not screen rawX/rawY |
-| eventTime/history timestamps | Monotonic sample time converted consistently to microseconds |
-| pressure | Raw observed value plus range/availability metadata |
-| tilt/orientation | Axis values when actually supported |
-| buttonState | Stylus primary/secondary barrel bitmask |
-| deviceId | Local diagnostic identity, not wire authentication |
-| flags | Cancellation handling with SDK guards |
-```
+| `MainActivity` | Native View-based UI, source/mode barriers, gestures, pairing and lifecycle/retries |
+| `InkInputView`, `InputReducer` | MotionEvent extraction, active-pointer ownership, ink and pointer gestures |
+| `ViewportFit`, `SharedViewport`, `EditorGeometry` | Aspect fit, shared zoom and affine selection/edit mapping |
+| `RadialMenuView`, `RadialMenuGeometry` | Pen menu and constrained-screen fallback |
+| `SessionClient`, `SessionOutbox` | Pinned TLS, serialization, ordered bounded commands and pacing |
+| `PendingInk`, `VideoFrameState`, `VideoGeometry` | Provisional geometry and texture-latched revision/epoch handoff |
+| `RemoteVideoDecoder` | Video validation, MediaCodec and worker-based output draining |
+| `PairingInvitation`, `RememberedHostStore` | QR/manual invitation and Keystore-protected credentials |
+| `ClipboardImage` | Explicit worker-based clipboard PNG decoding/size reduction |
+| `DrawingRecovery` | Atomic private per-host/per-monitor snapshots and local mutation/history mirror |
 
-Normalize pressure with the device's available motion range only when valid. Pressure is not guaranteed to be within a universal 0..1 range; reject nonfinite values and preserve raw diagnostic data. Unsupported axes remain absent, not fabricated zeros. Use getMotionRange for availability. Tilt/orientation are optional metadata, not required to draw.
+These are files under `android\app\src\main\java\com\drawdock`, not separate
+Gradle modules. The app uses Android Views/TextureView, not Compose, generated
+protobuf, a JNI transport or a diagnostics-export subsystem.
+Compile/target SDK is 36; builds use Java 17.
 
-For ACTION_MOVE, emit historical samples oldest first, then the current sample for the active pointer using its current index. Preserve sample timestamps. Do not send historical samples again after a duplicate callback; deduplicate by gesture/sample sequence without assuming two equal coordinates indicate the same sample. Unknown/nonfinite coordinates are ignored with a bounded error counter.
+Permissions are INTERNET and optional QR CAMERA; no tablet MediaProjection,
+background input service, broad storage permission or background clipboard
+monitor is required. Keep-screen-on is scoped to the active foreground session.
 
-### Required dispatch outline
+## 3. Input-to-output pipeline
 
-```kotlin
-// Domain outline, not drop-in Android implementation.
-when (event.actionMasked) {
-    ACTION_DOWN, ACTION_POINTER_DOWN -> handleContactStart(event, event.actionIndex)
-    ACTION_MOVE -> handleHistoricalThenCurrentSamples(event)
-    ACTION_POINTER_UP, ACTION_UP -> {
-        val canceled = Build.VERSION.SDK_INT >= 33 &&
-            (event.flags and FLAG_CANCELED) != 0
-        handleContactEnd(event, event.actionIndex, canceled)
-    }
-    ACTION_CANCEL -> cancelAllActiveContacts() // ALWAYS, on all supported SDKs
-}
-```
+![Stylus ownership, durable commit and host-video handoff](diagrams/input-pipeline.svg)
 
-Hover is processed through onHoverEvent/generic motion as appropriate; test actual device dispatch. ACTION_HOVER_EXIT means stop hover indication, not a synthesized click or button release for an unrelated gesture. Barrel ACTION_BUTTON_PRESS/RELEASE handling must also inspect button-state changes during ordinary motion/contact; devices differ in reporting paths [A1,A2].
+[Editable diagram source](diagrams/input-pipeline.excalidraw).
 
-## 4. Pointer ownership and input state machine
+Input callbacks extract primitives from MotionEvent. Do not retain framework
+events or perform socket I/O in callbacks. Historical move samples are processed
+oldest first, followed by the current sample for the active pointer ID. Pointer
+indices may change; identity is not an array position.
 
-Only one stylus/eraser pointer owns the viewport interaction at a time. A finger down must not prevent a later stylus from being recognized; consume the viewport touch stream so pointer transitions continue arriving. A second pen-like pointer is ignored until the active one ends. UI controls have their own normal touch handling.
+`PenSample` contains pointer/tool identity, View-local XY, monotonic event time
+in microseconds, pressure, tilt, orientation and button state. Coordinates must
+be finite. Axis values are locally observed metadata; current extraction is
+not a complete device motion-range negotiation/diagnostics contract.
+Persistent wire objects carry XY and uniform width, not pressure/timestamps.
 
-States:
+Only `TOOL_TYPE_STYLUS` owns drawing/pointer contact. Fingers and eraser tool
+types do not draw; eraser use is reported as unsupported rather than converted
+to ordinary colored ink. One pen owns a gesture; other pointers cannot steal it.
+Finger-first input must not prevent later stylus recognition.
 
-```text
-Disconnected / NotReady
-ReadyHover
-PointerContact(generation, pointerId, heldButton)
-DrawContact(objectId, pointerId, selectedTool, style, sourceEpoch)
-Suspended
-```
+## 4. Readiness, contact and cancellation
 
-The input reducer is a pure testable Kotlin class independent of Activity/View. Inputs include pen events, mode/source changes, connection state and lifecycle changes. Outputs are local-preview commands and bounded semantic wire commands. The View does not directly send network traffic or inject OS input.
+Contact is admitted only with an active authenticated session, current source
+readiness and no pending incompatible mode/source/zoom/edit/recovery operation.
+A pen hold while suspended can open tools, but cannot become a drawing or click
+when readiness later changes.
 
-Source, mode and geometry have separate generations. Capture them at gesture start. Any incompatible change cancels that gesture before applying the new state. Do not reinterpret half of a freehand stroke as a mouse drag.
+Tool, style, pointer button and gesture state are latched at contact start.
+Changing mode/source/style, navigation, surface loss or lifecycle state cancels
+incomplete geometry before applying new state. Up/cancel must release a pointer
+interaction, never reinterpret it as an annotation.
 
-## 5. Pointer mode semantics
+`ACTION_CANCEL` cancels on all supported APIs. On API 33+, canceled up events
+use guarded `FLAG_CANCELED` handling. Do not assume perfect palm rejection from
+ignoring fingers; verify actual dispatch and hardware cancellation separately.
+An unfinished contact is not a durable committed object.
 
-- Hover: send replaceable absolute motion when supported. Devices without hover still support contact pointing.
-- Tip down: send reliable left down with current normalized coordinate and interaction generation. No speculative PC click on hover/prediction.
-- Move: send absolute motion, preserving order relative to down/up barriers. Motion may be coalesced to the latest real sample in a send interval.
-- Tip up: send reliable up at final real coordinate; end the generation.
-- Cancel: send reliable cancel/release-all for that interaction; never commit a pending click afterward.
-- UI right-click button: emits a reliable right down/up at the last valid source position; disabled if no valid position exists.
+## 5. Drawing, paths and editing
 
-Initial barrel mapping: if primary barrel is held BEFORE contact, that contact becomes a right-button interaction instead of left; it remains latched until lift/cancel even if the barrel is released mid-contact. Hover barrel presses alone do not click. Secondary barrel is unassigned initially. This deliberately simple behavior avoids ambiguous left-to-right transitions. Device-specific alternative mapping requires an explicit setting/test, not silent double clicks.
+| Tool/action | Implemented behavior |
+|---|---|
+| Freehand / highlighter | Local sampled preview; complete XY geometry committed on lift; taps make dots |
+| Line / arrow / rectangle / ellipse / circle | Two-endpoint/bounding geometry; sub-3-View-pixel drag is canceled |
+| Polygon / polyline | Accumulate vertices across taps; explicit Finish path after minimum vertex count |
+| Text | Tap anchor, type and Place; no network typing per keystroke |
+| Image | Explicit Paste image from tablet clipboard; host validates PNG |
+| Select / Move | Host selects topmost transformed object; pen drag previews an oriented frame |
+| Rotate / Resize / Mirror | Absolute affine edit preserves original object points and payload |
 
-Physical mouse users may still operate the host; the prototype does not claim arbitration among simultaneous local/remote dragging. Host stop always wins. PC backend must release all remote-held buttons on connection lease expiry, independently of Android delivering an up event.
+Commits happen on completion, not as a streamed Begin/Append/CancelPreview
+protocol. There is no object eraser/delete command in this baseline.
+Tool/style/source/session changes cancel unfinished paths. In Draw mode no
+mouse down/up may result from viewport contact.
 
-## 6. Draw mode semantics and tools
+The menu offers colors including white and three widths. Highlighter is wider
+and translucent; text maps width choices to font sizes. Long-press tools use
+about 550 ms of stationary pen contact, then lift; movement disarms the hold.
+Header Pen tools and a scrollable constrained-layout fallback remain available.
 
-No PC mouse down/up commands may originate from viewport contact in Draw mode.
+A transform previews selection locally but updates the PC object on pen-up.
+Selection is transient single-object UI state. Canvas state, transforms and
+objects participate in history. Clear is confirmed; offline Clear explicitly
+clears the saved local document rather than contacting the PC.
+See [feature behavior](../docs/features.md) for tool-specific details.
 
-- Freehand: render local samples immediately; send actual samples as previews; commit final geometry at lift.
-- Arrow: contact defines start, motion defines endpoint, lift commits. Derive arrowhead from a shared geometry rule on Rust and Android, or transmit canonical polygon geometry; do not produce mismatched endpoints.
-- Rectangle: two contact corners; optional constraint creates square.
-- Ellipse: two bounding-box corners; optional constraint creates circle.
-- Tool/style is latched at contact start. Changing a toolbar selection during contact cancels the unfinished shape before selection changes.
-- Hardware ERASER tool may select object erase/delete if implemented; if not, display a clear unsupported-tool indicator. It must never silently draw an ordinary colored stroke.
+## 6. Pointer, laser and navigation
 
-Minimum UI: six distinguishable colors including red, yellow and blue; three widths; undo/redo; clear with confirmation. Defaults: opaque red, constant width, freehand. Finger drawing and pressure-varying width are deferred, not accidentally enabled by toolType fallback.
+Pointer mode must be host-acknowledged. Hover moves the mouse where hardware
+reports it. Ordinary tip contact latches left; primary barrel held at contact
+start latches right. Drag sends ordered down/motion/up; short taps click.
+Mouse-down is deferred while deciding between short tap, drag and menu hold,
+so opening tools does not click the underlying application.
 
-A tap in freehand creates a visible dot. Arrow/rectangle/ellipse shorter than a declared minimum screen-space threshold are canceled or become a documented minimum shape; select one rule and test it. Recommended prototype rule: freehand dot, other tools canceled below 3 tablet pixels.
+Adjacent compatible motion can coalesce, but never across source epochs,
+interaction generations or release barriers. The host independently releases
+held buttons on the 1.5-second lease even if Android cannot send termination.
 
-## 7. Palm rejection and cancellation
+Laser is nonpersistent contact/hover feedback, with 100-ms refresh and about
+300-ms host expiry. Stops survive coalescing. Blackboard prohibits Pointer mode.
 
-ACTION_CANCEL always cancels the active interaction, on every supported API. Do not require FLAG_CANCELED for this action. On API 33+, ACTION_POINTER_UP with FLAG_CANCELED cancels that pointer's interaction instead of committing it. Earlier Android versions cannot provide the same multi-pointer cancellation detail [A3,A4].
+Two fingers on the ready workspace pinch/pan shared 100-400% magnification.
+Single fingers do not draw/click. Navigation waits for actual host viewport
+and video readiness, not a speculative local transform. Reset and source/session
+changes return to 100%; zoom is not saved drawing metadata.
 
-Keep pending ink reversible until commit. On cancellation remove local preview and send CancelPreview for its object ID. Do not remove unrelated committed strokes. If cancellation races a transmitted commit, use an explicit compensating delete with a command ID and report the action; do not pretend the original commit was never sent.
+## 7. Coordinates and source epochs
 
-Ignore fingers on the viewport as an additional app policy, not as proof of perfect hardware palm rejection. Handle palm-first, pen-first, pen-plus-finger and changing pointer indices. ACTION_OUTSIDE is not a reliable gesture termination mechanism. Lifecycle/disconnect watchdogs are required.
+Video and input use the same aspect-fit rectangle excluding controls/insets.
+For source `(Ws,Hs)` and available View `(Wv,Hv)`, fit scale is
+`min(Wv/Ws, Hv/Hs)`; center the fitted image and normalize XY within it.
+Letterbox starts are ignored; active drags clamp at the edge and still terminate.
 
-## 8. Coordinate mapping
+Wire geometry is full-monitor normalized XY. Shared viewport maps a visible
+point to `origin + visible/scale`; annotation width is divided by scale.
+Selection composes viewport with object transform; submitted edits remove the
+viewport transform. Physical circle constraints account for source aspect ratio.
+Do not use tablet resolution as desktop coordinates or apply rotation twice.
 
-Geometry message defines: source ID, geometry epoch, canonical width/height, rotation convention, video dimensions, content crop (initially none), and annotation capture mode. Source geometry is authoritative from Rust. Tablet view changes create a new local viewport transform and cancel contact before reuse.
+Commands retain their enqueue-time `source_epoch`. A new monitor/zoom/restored
+epoch requires a matching texture-latched frame and `source_ready_ack` before
+contact resumes. Late callbacks from old session generations cannot mutate
+the replacement session.
 
-Use the actual displayed video content rectangle after insets, toolbars and letterboxing. For a fit transform:
+## 8. Serialization, backpressure and video
 
-```text
-s = min(viewWidth/sourceWidth, viewHeight/sourceHeight)
-displayWidth = s*sourceWidth; displayHeight = s*sourceHeight
-left = (viewWidth-displayWidth)/2; top = (viewHeight-displayHeight)/2
-u = (x-left)/displayWidth; v = (y-top)/displayHeight
-```
+Pinned TLS/TCP carries newline-delimited JSON v2 for control, objects and pointer.
+A separate video connection authenticates with the same pin and fresh session
+video token on the same port, default 47831. USB uses ADB reverse; LAN uses an
+explicit host address. No raw UDP, three-port service or certificate bypass.
 
-Apply the agreed rotation transform exactly once. New contacts in letterboxing are ignored. An active drag leaving the image is clamped to its edge and still ends reliably on up/cancel. A pointer returning from the margin does not create a second gesture.
+One ordered writer spaces every frame by at least 12.5 ms (80 frames/s); it does
+not burst to catch up. The queue admits 128 ordinary commands and reserves one
+additional release slot. Pending stroke accounting is bounded to 8 MiB.
+Large final objects use 36-KiB raw chunks within the host's frame/transaction
+bounds. Queue/admission failures are explicit, not unbounded buffering.
 
-Store annotations in source-normalized coordinates, not tablet pixels. Test four corners, center, portrait display, Android rotation, monitor switch and toolbar/inset changes. Never use the tablet's physical resolution as if it were PC desktop coordinates.
+MediaCodec receives bounded ordered H.264 units and fresh source configuration.
+Decoder output drains on its own worker rather than waiting for the next network
+packet. Low-latency behavior depends on actual codec support, not API level alone.
+Dependent encoded units are not arbitrarily dropped.
 
-## 9. Preview, canonical state and capture reconciliation
+Only included-ink video is supported. Local provisional geometry stays until
+both correlated commit revision and safe texture-latched watermark arrive,
+in either order. Committed objects must not be redrawn over live video.
+Preview bounds are separate from durable recovery; disconnect clears uncertain
+preview but not saved completed work.
 
-Two rendering layers: decoded video Surface below, transparent local ink above. Low-latency front-buffer rendering/prediction are optional optimizations after correct handling exists [A2]. Predictions are local-only; never transmit predicted coordinates as final ink or mouse events. Reconcile them against actual samples on every update.
+## 9. Durable recovery and lifecycle
 
-Object IDs generated at BeginPreview persist through Commit. Rust acknowledgment determines canonical revision. Protocol details, bounds and chunked commit transactions are in DD-ARCH-001; a 20,000-point stroke must not be shoved into a 64 KiB message. Actual final geometry can be simplified under a declared pixel error bound before transfer; log the method, not the point content.
+![Foreground retries, private saved drawing and restoration barrier](diagrams/recovery.svg)
 
-INCLUDED video: committed ink is already in video; Android must not draw it again. Remove provisional ink only after the protocol's validated video/capture watermark covers the relevant revision. EXCLUDED video: Android renders canonical ink and merges preview by ID. Surface presentation, host submit acknowledgments and video capture are different events. If watermark accuracy is not yet proven, mark reconciliation gate blocked rather than hide ghost/double ink.
+[Editable diagram source](diagrams/recovery.excalidraw).
 
-On reconnect, remove uncertain previews and receive a canonical scene snapshot before enabling contact. Do not replay old button events. Reconcile final commands by command ID if the outcome is uncertain; never duplicate a stroke solely because its ack was lost.
+`DrawingRecovery` saves the intended mutation atomically before network enqueue.
+Completed object geometry, transforms, text/images and Blackboard/Grid persist
+privately by verified host fingerprint and monitor. Local history mirrors the
+host's count/estimated-cost policy while connected.
 
-## 10. Scheduling and backpressure
+On disconnect, show the saved drawing read-only and retry the same authenticated
+endpoint with 1-30-second backoff while foreground. Background/surface loss
+ends the connection and retains work; retries resume when the app returns.
+Explicit Disconnect/Stop retrying retains work without retries. App restart
+loads saved content; the user taps Connect.
 
-Input callbacks: copy/extract and enqueue only. Local preview renders on the next available frame, independently of network and video decode. Default outbound preview interval <=8 ms, batch <=64 points; these are proposed tuning settings, not guarantees of a particular device sample rate. Input frequency is discovered, not hardcoded to 240 Hz.
+After authentication and initial video readiness, chunk and atomically restore
+the saved document. Editing stays paused through the new source epoch/video
+barrier. Recovery resets undo/redo, laser, selection and zoom, and starts Draw.
+Rejected commits are removed; rejected correlated changes are rolled back and
+recovery realigns host/local history. Missing monitor, invalid storage,
+authentication failure or rejected restoration stops with a visible error.
+Automatic retry must never open enrollment or change a certificate pin.
 
-A single ordered semantic writer owns control/annotation transitions. Bounded channels preserve Begin/Commit/Cancel and down/up. Replaceable hover/pointer motion may coalesce only within a generation. If actual stroke samples exceed preview budget, thin intermediate preview samples while retaining unsimplified final geometry within global limits. If final commit cannot be queued, cancel explicitly and notify the user; never allocate without bound.
+Snapshot limits are 16 MiB per document and 32 MiB aggregate per host, with
+ordinary scene limits still enforced. Offline image previews are downsampled
+within a bounded bitmap budget without modifying saved PNGs. Synchronous
+save-before-send can delay large-scene input. Uninstall/data clearing removes
+saved drawings; no export or cloud backup is implemented.
 
-Suggested client bounds: one active pen, 4,096 pending preview samples, 8 MiB final-object/scene working budget subject to shared limits. Do not wait for a network round-trip to render local ink. Do not allow video backlog to occupy the semantic writer.
+The launcher restores a missing selected-device ADB tunnel after USB cable
+reconnect; Android cannot recreate a Windows mapping itself. A CLI host needs
+explicit tunnel recreation. Wi-Fi uses the same recovery protocol without ADB.
 
-## 11. Video and transport integration
+## 10. Tests, evidence and deferred capabilities
 
-TLS/TCP is the feasibility baseline on Wi-Fi and ADB. Use separate authenticated session-bound connections for control/input (47831), video (47832), annotations (47833). Bind each with credentials for the same approved session; session ID alone is not authentication. TCP_NODELAY for control/annotation. Android connects to the explicit PC address on Wi-Fi and 127.0.0.1 through ADB reverse on USB [A6].
+JVM tests live in `android\app\src\test\java\com\drawdock`. Cover pointer ownership,
+history ordering, cancellation, letterboxing, affine/zoom transforms, menu
+gesture slop, pacing/release slots, video metadata, provisional handoff and
+recovery documents. Do not claim a generated protobuf/golden-vector suite exists.
 
-MediaCodec decodes negotiated H.264 to a Surface. Query profile/level/resolution support and low-latency feature support rather than assuming API 30 guarantees a low-latency decoder [A5]. Reconfigure on stream epoch changes; never feed old frames after a source switch. Video reconnect requires fresh configuration/keyframe as appropriate.
+Real device acceptance additionally requires physical pen drawing on the host,
+fullscreen visibility, palm/eraser behavior, barrel/hover where supported,
+mid-drag loss without stuck buttons, monitor/zoom transitions, real USB/Wi-Fi
+interruption and app/host restart recovery. Injected pen events and successful
+builds do not prove digitizer latency or hardware behavior.
 
-No raw unauthenticated UDP or disabled TLS checks. QUIC is a later measured Wi-Fi experiment; it does not block proving host annotation viability.
+Pressure-varying ink, motion prediction/front-buffer APIs, native HID emulation,
+document export, alternative USB transport and QUIC remain deferred. Future
+desktop adapters preserve this normalized scene/wire contract but must advertise
+their own actual presentation/input/capture capabilities.
 
-## 12. Lifecycle, metrics and diagnostics
+Primary input references:
 
-onPause, focus loss affecting the input surface, screen lock, surface destruction, disconnect and source/mode changes cancel active gestures and enqueue release/cancel before suspension when possible. Backend lease expiry handles cases when Android cannot send. When resumed, require an active session, current geometry acknowledgment and no inherited held buttons.
-
-Diagnostics page: device/API, detected tool types, axis ranges, observed sample interval distribution, hover/barrel availability, cancellation counters, current source/epochs, decoder, queue ages and connection status. Export metrics CSV only on explicit user action. No raw point trails/screenshots/secrets by default. Monotonic Android and PC clocks are different; round-trip and cross-device latency must not use naive subtraction.
-
-## 13. Tests and acceptance
-
-Pure reducer/geometry tests: pointer index changes, palm-first stylus, no hover device, up/cancel rules, barrel latching, out-of-bounds start versus active drag, stale epochs, mode switch mid-contact, rotation and reconnect. Shared protobuf golden vectors with Rust.
-
-Instrumented real tablet tests:
-
-1. Real pen freehand/arrow/rectangle/ellipse appear on the physical host output and tablet.
-2. Finger/palm contact does not draw or click. API 33 cancellation behavior verified if available; older-device limits documented.
-3. Pointer drag, right click and cancel have no stuck host button.
-4. Hover works where hardware reports it; absence is labeled, not emulated with fabricated events.
-5. At least 100 repeated strokes and 20 mode/source changes without duplicates or stale input.
-6. Background app, pull cable mid-contact, rotate, lock and reconnect safely.
-7. Local pen-to-ink target p95 <=25 ms and pen-to-host-visible target p95 <=50 ms USB / <=70 ms Wi-Fi on reference hardware. Targets are proposed; use camera evidence and record actual refresh rates. Automated event injection does not establish real stylus latency or palm behavior.
-
-## 14. References
-
-[A1] Android MotionEvent API: https://developer.android.com/reference/android/view/MotionEvent
-
-[A2] Android Developers, Advanced stylus features: https://developer.android.com/develop/ui/views/touch-and-input/stylus-input/advanced-stylus-features
-
-[A3] Android Developers, Input compatibility — historical samples and cancellation: https://developer.android.com/develop/ui/views/touch-and-input/input-compatibility-on-large-screens
-
-[A4] Android Developers, Stylus palm rejection: https://developer.android.com/develop/adaptive-apps/cookbook/stylus-palm-rejection
-
-[A5] AOSP, Low-latency decoding in MediaCodec: https://source.android.com/docs/core/media/low-latency-media
-
-[A6] AOSP, ADB manual: https://android.googlesource.com/platform/packages/modules/adb/+/refs/heads/master/docs/user/adb.1.md
-
-[A7] Android Developers, Advanced stylus support codelab: https://developer.android.com/codelabs/large-screens/advanced-stylus-support
-
-Numeric limits, batch intervals, module boundaries and tool mappings are proposed DrawDock design decisions. The source documentation explains platform input behavior, not achieved project latency or device-specific capability.
+- [MotionEvent](https://developer.android.com/reference/android/view/MotionEvent).
+- [Advanced stylus features](https://developer.android.com/develop/ui/views/touch-and-input/stylus-input/advanced-stylus-features).
+- [Input compatibility and cancellation](https://developer.android.com/develop/ui/views/touch-and-input/input-compatibility-on-large-screens).
+- [Low-latency MediaCodec](https://source.android.com/docs/core/media/low-latency-media).

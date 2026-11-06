@@ -398,7 +398,7 @@ implementation guides.
 | [Brand and UI guidelines](docs/branding.md) | Component-owned assets, visual tokens and interaction-preserving styling |
 | [Builds and releases](docs/releasing.md) | Tagged builds, Windows packaging, signing and third-party sources |
 
-[Technical design inputs](specs/) may describe proposals beyond the current
+[Implementation-aligned specifications](specs/) also describe deferred design beyond the current
 executable contract; use the guides above for implemented behavior.
 
 <a id="license"></a>

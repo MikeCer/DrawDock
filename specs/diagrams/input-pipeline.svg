@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1110" viewBox="0 0 1240 1110" role="img" aria-labelledby="title"><title id="title">Completed stroke | from tablet contact to physical ink</title><rect width="100%" height="100%" fill="#ffffff"/><text x="40" y="48" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="28"><tspan x="40" dy="0">Completed stroke | from tablet contact to physical ink</tspan></text>
+<rect x="40" y="150" width="530" height="630" rx="12" fill="none" stroke="#1864ab" stroke-width="2"/>
+<text x="60" y="195" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="20"><tspan x="60" dy="0">Android tablet</tspan></text>
+<rect x="680" y="150" width="520" height="630" rx="12" fill="none" stroke="#2f9e44" stroke-width="2"/>
+<text x="700" y="195" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="20"><tspan x="700" dy="0">Rust Windows host</tspan></text>
+<rect x="60" y="250" width="490" height="100" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="305.0" y="296.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="305.0" dy="0">MotionEvent / InputReducer / InkInputView</tspan><tspan x="305.0" dy="20.0">One stylus owner; historical XY; immediate local preview</tspan></text>
+<rect x="60" y="420" width="490" height="100" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="305.0" y="466.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="305.0" dy="0">Complete geometry on lift / explicit Finish</tspan><tspan x="305.0" dy="20.0">Atomic private save before enqueueing mutation</tspan></text>
+<rect x="60" y="590" width="490" height="100" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="305.0" y="636.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="305.0" dy="0">SessionClient / bounded ordered SessionOutbox</tspan><tspan x="305.0" dy="20.0">Pinned TLS; enqueue-time epoch; chunk large commits</tspan></text>
+<rect x="700" y="250" width="480" height="100" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="940.0" y="296.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="940.0" dy="0">Validate authentication / epoch / mode / limits</tspan><tspan x="940.0" dy="20.0">Commit canonical object; advance content revision</tspan></text>
+<rect x="700" y="420" width="480" height="100" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="940.0" y="466.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="940.0" dy="0">SVG / resvg / layered BGRA presentation</tspan><tspan x="940.0" dy="20.0">Physical monitor shows live desktop + ink</tspan></text>
+<rect x="700" y="590" width="480" height="100" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="940.0" y="636.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="940.0" dy="0">FFmpeg captures included ink and encodes H.264</tspan><tspan x="940.0" dy="20.0">Separate authenticated video connection</tspan></text>
+<polyline points="305,350 305,420" fill="none" stroke="#1864ab" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="310.75310646325045,409.4690092573155 305,420 299.24689353674955,409.4690092573155" fill="none" stroke="#1864ab" stroke-width="2" stroke-linecap="round"/>
+<polyline points="305,520 305,590" fill="none" stroke="#1864ab" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="310.75310646325045,579.4690092573155 305,590 299.24689353674955,579.4690092573155" fill="none" stroke="#1864ab" stroke-width="2" stroke-linecap="round"/>
+<polyline points="550,640 630,640 630,300 700,300" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="689.4690092573155,294.24689353674955 700,300 689.4690092573155,305.75310646325045" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<text x="575" y="234" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="14"><tspan x="575" dy="0">JSON v2</tspan><tspan x="575" dy="17.5">XY + style</tspan></text>
+<polyline points="940,350 940,420" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="945.7531064632504,409.4690092573155 940,420 934.2468935367496,409.4690092573155" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+<polyline points="940,520 940,590" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="945.7531064632504,579.4690092573155 940,590 934.2468935367496,579.4690092573155" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+<polyline points="940,690 940,850 305,850 305,690" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="299.24689353674955,700.5309907426845 305,690 310.75310646325045,700.5309907426845" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<text x="405" y="886" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="405" dy="0">MediaCodec / TextureView latches returned PC video</tspan></text>
+<rect x="40" y="940" width="1160" height="130" rx="12" fill="#dee2e6" stroke="#495057" stroke-width="1.5"/>
+<text x="620.0" y="1001.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="620.0" dy="0">Retire provisional ink only after commit_ack AND a safe texture-latched revision watermark</tspan><tspan x="620.0" dy="20.0">Tablet preview and protocol acknowledgements alone do not prove physical pen-to-display latency</tspan></text></svg>

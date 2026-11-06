@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1220" height="1180" viewBox="0 0 1220 1180" role="img" aria-labelledby="title"><title id="title">DrawDock | implemented architecture</title><rect width="100%" height="100%" fill="#ffffff"/><text x="40" y="48" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="28"><tspan x="40" dy="0">DrawDock | implemented architecture</tspan></text>
+<text x="40" y="116" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="40" dy="0">Annotation path + separate pointer adapter | Dashed: deferred platform support</tspan></text>
+<rect x="40" y="160" width="330" height="620" rx="12" fill="none" stroke="#1864ab" stroke-width="2"/>
+<text x="60" y="200" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="20"><tspan x="60" dy="0">Android | Kotlin Views</tspan></text>
+<rect x="800" y="160" width="360" height="620" rx="12" fill="none" stroke="#2f9e44" stroke-width="2"/>
+<text x="820" y="200" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="20"><tspan x="820" dy="0">Windows | Rust / Win32</tspan></text>
+<rect x="60" y="240" width="290" height="110" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="205.0" y="291.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="205.0" dy="0">Stylus gestures + preview</tspan><tspan x="205.0" dy="20.0">MainActivity / InkInputView</tspan></text>
+<rect x="60" y="410" width="290" height="110" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="205.0" y="461.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="205.0" dy="0">Private drawing snapshot</tspan><tspan x="205.0" dy="20.0">Atomic save before send</tspan></text>
+<rect x="60" y="580" width="290" height="140" rx="12" fill="#a5d8ff" stroke="#1864ab" stroke-width="1.5"/>
+<text x="205.0" y="646.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="205.0" dy="0">TLS client + MediaCodec</tspan><tspan x="205.0" dy="20.0">Control writer / video decoder</tspan></text>
+<rect x="420" y="260" width="320" height="140" rx="12" fill="#f3d9fa" stroke="#862e9c" stroke-width="1.5"/>
+<text x="580.0" y="326.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="580.0" dy="0">Pinned TLS / protocol v2</tspan><tspan x="580.0" dy="20.0">Control + video, same port</tspan></text>
+<rect x="420" y="500" width="320" height="140" rx="12" fill="#f3d9fa" stroke="#862e9c" stroke-width="1.5"/>
+<text x="580.0" y="566.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="580.0" dy="0">USB / ADB reverse TCP</tspan><tspan x="580.0" dy="20.0">or explicitly enabled private LAN</tspan></text>
+<rect x="820" y="240" width="320" height="100" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="980.0" y="286.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="980.0" dy="0">Session / trust / source epochs</tspan><tspan x="980.0" dy="20.0">Validate and authorize commands</tspan></text>
+<rect x="820" y="380" width="320" height="100" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="980.0" y="426.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="980.0" dy="0">dd-scene | portable Rust domain</tspan><tspan x="980.0" dy="20.0">Objects / affine edits / history</tspan></text>
+<rect x="820" y="520" width="320" height="100" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="980.0" y="566.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="980.0" dy="0">Layered overlay + Magnifier</tspan><tspan x="980.0" dy="20.0">Click-through physical presentation</tspan></text>
+<rect x="820" y="660" width="320" height="90" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="980.0" y="701.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="980.0" dy="0">FFmpeg capture / H.264 encode</tspan><tspan x="980.0" dy="20.0">Included desktop ink and cursor</tspan></text>
+<rect x="420" y="665" width="320" height="110" rx="12" fill="#b2f2bb" stroke="#2f9e44" stroke-width="1.5"/>
+<text x="580.0" y="716.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="580.0" dy="0">SendInput | Pointer mode</tspan><tspan x="580.0" dy="20.0">Bypasses the annotation scene</tspan></text>
+<rect x="800" y="865" width="360" height="110" rx="12" fill="#99e9f2" stroke="#0c8599" stroke-width="1.5"/>
+<text x="980.0" y="916.0" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="980.0" dy="0">Physical PC monitor / projector</tspan><tspan x="980.0" dy="20.0">Original live desktop + annotations</tspan></text>
+<rect x="40" y="1020" width="1120" height="120" rx="12" fill="#dee2e6" stroke="#495057" stroke-width="1.5" stroke-dasharray="8 6"/>
+<text x="600.0" y="1075.5" text-anchor="middle" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="18"><tspan x="600.0" dy="0">DEFERRED: X11 / native Wayland / GNOME presenter integration</tspan><tspan x="600.0" dy="22.5">Reuse scene and wire semantics; implement capture, input, consent and presentation per platform</tspan></text>
+<polyline points="205,350 205,410" fill="none" stroke="#1864ab" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="210.75310646325045,399.4690092573155 205,410 199.24689353674955,399.4690092573155" fill="none" stroke="#1864ab" stroke-width="2" stroke-linecap="round"/>
+<polyline points="205,520 205,580" fill="none" stroke="#1864ab" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="210.75310646325045,569.4690092573155 205,580 199.24689353674955,569.4690092573155" fill="none" stroke="#1864ab" stroke-width="2" stroke-linecap="round"/>
+<polyline points="350,635 400,635 400,330 420,330" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="409.4690092573155,324.24689353674955 420,330 409.4690092573155,335.75310646325045" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<polyline points="740,330 780,330 780,290 820,290" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="809.4690092573155,284.24689353674955 820,290 809.4690092573155,295.75310646325045" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<polyline points="820,315 760,315 760,720 740,720" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="750.5309907426845,725.7531064632504 740,720 750.5309907426845,714.2468935367496" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+<polyline points="580,400 580,500" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="980,340 980,380" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="985.7531064632504,369.4690092573155 980,380 974.2468935367496,369.4690092573155" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+<polyline points="980,480 980,520" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="985.7531064632504,509.4690092573155 980,520 974.2468935367496,509.4690092573155" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+<polyline points="980,620 980,660" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="985.7531064632504,649.4690092573155 980,660 974.2468935367496,649.4690092573155" fill="none" stroke="#2f9e44" stroke-width="2" stroke-linecap="round"/>
+<polyline points="980,750 980,815 205,815 205,720" fill="none" stroke="#862e9c" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="199.24689353674955,730.5309907426845 205,720 210.75310646325045,730.5309907426845" fill="none" stroke="#862e9c" stroke-width="2" stroke-linecap="round"/>
+<text x="430" y="851" text-anchor="start" fill="#000000" font-family="Arial, Helvetica, sans-serif" font-size="16"><tspan x="430" dy="0">Included H.264 video, over pinned TLS</tspan></text>
+<polyline points="1140,570 1180,570 1180,850 980,850 980,865" fill="none" stroke="#0c8599" stroke-width="2" stroke-linejoin="round"/>
+<polyline points="985.7531064632504,854.4690092573155 980,865 974.2468935367496,854.4690092573155" fill="none" stroke="#0c8599" stroke-width="2" stroke-linecap="round"/></svg>
