@@ -77,7 +77,7 @@ impl Transform {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct Canvas {
     pub blackboard: bool,
     pub grid: bool,
@@ -291,6 +291,15 @@ impl Scene {
             revision: self.revision,
             ..Default::default()
         }
+    }
+
+    pub fn restore(&mut self, objects: Vec<InkObject>, canvas: Canvas) -> Result<(), String> {
+        let mut restored = Self::from_fixture(SceneFixture { objects })?;
+        restored.canvas = canvas;
+        restored.revision = self.revision;
+        restored.changed();
+        *self = restored;
+        Ok(())
     }
 
     pub fn commit(&mut self, object: InkObject) -> Result<(), String> {

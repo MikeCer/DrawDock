@@ -279,6 +279,42 @@ fn reverse_exists(text: &str, port: u16) -> Result<bool, String> {
 }
 
 impl Reverse {
+    fn maintain(
+        &mut self,
+        mut run: impl FnMut(&str, &[&str]) -> Result<String, String>,
+    ) -> Result<bool, String> {
+        let devices = parse_devices(&run(&self.adb, &["devices", "-l"])?);
+        if !devices
+            .iter()
+            .any(|device| device.serial == self.serial && device.state == "device")
+        {
+            return Err(
+                "Selected USB tablet is disconnected or not authorized; waiting for it to return"
+                    .into(),
+            );
+        }
+        if reverse_exists(
+            &run(&self.adb, &["-s", &self.serial, "reverse", "--list"])?,
+            self.port,
+        )? {
+            return Ok(false);
+        }
+        let endpoint = format!("tcp:{}", self.port);
+        run(
+            &self.adb,
+            &[
+                "-s",
+                &self.serial,
+                "reverse",
+                "--no-rebind",
+                &endpoint,
+                &endpoint,
+            ],
+        )?;
+        self.created = true;
+        Ok(true)
+    }
+
     fn enable(path: String, serial: String, port: u16) -> Result<Self, String> {
         if serial.contains(':') || serial.is_empty() {
             return Err("Select an authorized USB device, not ADB-over-Wi-Fi".into());
@@ -373,12 +409,14 @@ fn discover(path: &str, events: &SyncSender<Event>) -> Result<(), String> {
 
 fn run(receiver: Receiver<Message>, sender: SyncSender<Message>, events: &SyncSender<Event>) {
     let mut host: Option<Host> = None;
-    let mut reverse = None;
+    let mut reverse: Option<Reverse> = None;
     let mut pending_usb = BTreeMap::new();
     let mut next_id = 0u64;
     let mut generation = 0u64;
     let mut stopping = None;
     let mut quit = false;
+    let mut next_usb_check = Instant::now();
+    let mut usb_error = None;
     loop {
         if let Some(active) = &mut host {
             match active.child.try_wait() {
@@ -417,6 +455,43 @@ fn run(receiver: Receiver<Message>, sender: SyncSender<Message>, events: &SyncSe
             cleanup_reverse(&mut reverse, events);
             report(events, Event::Exited);
             return;
+        }
+        if Instant::now() >= next_usb_check {
+            next_usb_check = Instant::now() + Duration::from_secs(2);
+            if host.is_some() && stopping.is_none() {
+                if let Some(mapping) = &mut reverse {
+                    match mapping.maintain(adb) {
+                        Ok(restored) => {
+                            if restored {
+                                log(
+                                    events,
+                                    "INFO",
+                                    "Restored USB forwarding for the selected tablet; authenticated reconnect can resume.",
+                                );
+                            } else if usb_error.is_some() {
+                                log(
+                                    events,
+                                    "INFO",
+                                    "Selected USB tablet forwarding is available again.",
+                                );
+                            }
+                            usb_error = None;
+                        }
+                        Err(error) => {
+                            if usb_error.as_ref() != Some(&error) {
+                                log(
+                                    events,
+                                    "ERROR",
+                                    format!("USB forwarding unavailable: {error}"),
+                                );
+                            }
+                            usb_error = Some(error);
+                        }
+                    }
+                } else {
+                    usb_error = None;
+                }
+            }
         }
         let message = match receiver.recv_timeout(Duration::from_millis(50)) {
             Ok(value) => value,

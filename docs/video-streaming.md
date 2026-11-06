@@ -84,9 +84,13 @@ displayed viewport, so a zoom acknowledgement does not erase them.
 The preview queue admits at most 128 marks with an 8 MiB accounting budget
 (including conservative point/string costs). Admission failure is reported
 without sending the mark. Host rejection removes that mark; source changes and
-disconnect clear pending state. A 10-second handoff failure ends the session
+disconnect clear provisional pending state, not the durable tablet document.
+A 10-second handoff failure ends the session and starts authenticated recovery
 with an explicit error rather than retaining unbounded or apparently committed
 ink. These bounds are separate from the existing outbound command budget.
+During recovery Android renders its saved document locally with editing paused.
+The host atomically restores it and advances the source epoch; the client hides
+the saved view only after matching PC video and source readiness.
 
 The Windows presenter publishes a bounded 128-interval timeline only after
 successful layered-window presentation, magnifier painting and `DwmFlush`.

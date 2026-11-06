@@ -40,6 +40,7 @@ struct CommitTransaction {
     bytes: Vec<u8>,
     expected_bytes: usize,
     expires: Instant,
+    restoring: bool,
 }
 
 pub fn run_server(
@@ -304,6 +305,8 @@ pub fn run_server(
                     "selected": selected, "video_token": video_token,
                     "remembered_device": credential,
                     "shared_zoom": true,
+                    "drawing_recovery": true,
+                    "recovery_object_bytes": size_of::<InkObject>(),
                 }),
             )?;
             stream
@@ -486,6 +489,45 @@ fn serve_authenticated(
                 ));
             }
             require_ready(command, source_ready)?;
+            if transaction.as_ref().is_some_and(|active| active.restoring)
+                && !matches!(command, "heartbeat" | "restore_chunk" | "finish_restore")
+            {
+                return Err("drawing restoration is in progress".into());
+            }
+            if command == "finish_restore" {
+                let active = transaction
+                    .take()
+                    .ok_or("restore has no active transaction")?;
+                if !active.restoring
+                    || message["request_id"].as_u64() != Some(active.object_id)
+                    || active.bytes.len() != active.expected_bytes
+                    || hex(&Sha256::digest(&active.bytes)) != active.digest
+                {
+                    return Err("drawing restore length, identity or digest mismatch".into());
+                }
+                let document: Value = serde_json::from_slice(&active.bytes)
+                    .map_err(|error| format!("invalid recovery document: {error}"))?;
+                let objects: Vec<InkObject> =
+                    serde_json::from_value(document["objects"].clone())
+                        .map_err(|error| format!("invalid recovery objects: {error}"))?;
+                let canvas: Canvas = serde_json::from_value(document["canvas"].clone())
+                    .map_err(|error| format!("invalid recovery canvas: {error}"))?;
+                let mut restored = scene.lock().map_err(|_| "scene lock poisoned")?.clone();
+                restored.restore(objects, canvas)?;
+                input.force_draw()?;
+                crate::source::apply_zoom(&source, crate::zoom::Viewport::default())?;
+                let mut selected = source.lock().map_err(|_| "source lock poisoned")?;
+                selected.epoch = selected
+                    .epoch
+                    .checked_add(1)
+                    .ok_or("source epoch exhausted")?;
+                *scene.lock().map_err(|_| "scene lock poisoned")? = restored;
+                source_ready = false;
+                return Ok(Some(json!({
+                    "type":"restore_ack", "request_id": active.object_id,
+                    "selected": selected.metadata()
+                })));
+            }
             if command == "set_zoom" {
                 let zoom_started = Instant::now();
                 let request_id = message["request_id"]
@@ -548,6 +590,9 @@ fn require_ready(command: &str, ready: bool) -> Result<(), String> {
                 | "clear_display"
                 | "set_mode"
                 | "set_zoom"
+                | "begin_restore"
+                | "restore_chunk"
+                | "finish_restore"
         )
     {
         return Err("input suspended until the selected video geometry is acknowledged".into());
@@ -661,19 +706,27 @@ fn process_command(
             Ok(Some(json!({"type": "commit_ack", "object_id": id,
                 "source_epoch": message["source_epoch"], "revision": scene.revision()})))
         }
-        "begin_commit" => {
+        "begin_commit" | "begin_restore" => {
             if transaction.is_some() {
                 return Err("another commit transaction is already active".into());
             }
+            let restoring = command == "begin_restore";
             let object_id = message
-                .get("object_id")
+                .get(if restoring { "request_id" } else { "object_id" })
                 .and_then(Value::as_u64)
                 .ok_or("commit transaction has an invalid object id")?;
             let expected_bytes = message
                 .get("total_bytes")
                 .and_then(Value::as_u64)
                 .and_then(|length| usize::try_from(length).ok())
-                .filter(|length| (1..=MAX_COMMIT_BYTES).contains(length))
+                .filter(|length| {
+                    (1..=if restoring {
+                        16 * 1024 * 1024
+                    } else {
+                        MAX_COMMIT_BYTES
+                    })
+                        .contains(length)
+                })
                 .ok_or("commit transaction size is out of range")?;
             let digest = message
                 .get("digest")
@@ -688,16 +741,26 @@ fn process_command(
                 digest,
                 bytes: Vec::with_capacity(expected_bytes),
                 expected_bytes,
-                expires: Instant::now() + COMMIT_LIFETIME,
+                expires: Instant::now()
+                    + if restoring {
+                        Duration::from_secs(120)
+                    } else {
+                        COMMIT_LIFETIME
+                    },
+                restoring,
             });
             Ok(Some(json!({"type": "ack"})))
         }
-        "commit_chunk" => {
+        "commit_chunk" | "restore_chunk" => {
             let active = transaction
                 .as_mut()
                 .ok_or("commit chunk has no active transaction")?;
             let object_id = message
-                .get("object_id")
+                .get(if command == "restore_chunk" {
+                    "request_id"
+                } else {
+                    "object_id"
+                })
                 .and_then(Value::as_u64)
                 .ok_or("commit chunk has an invalid object id")?;
             let offset = message
@@ -713,6 +776,7 @@ fn process_command(
                 .decode(encoded)
                 .map_err(|error| format!("invalid base64 commit chunk: {error}"))?;
             let invalid = active.object_id != object_id
+                || active.restoring != (command == "restore_chunk")
                 || active.bytes.len() != offset
                 || chunk.is_empty()
                 || chunk.len() > MAX_COMMIT_CHUNK_BYTES
@@ -733,6 +797,7 @@ fn process_command(
                 .and_then(Value::as_u64)
                 .ok_or("commit finish has an invalid object id")?;
             if active.object_id != object_id
+                || active.restoring
                 || active.bytes.len() != active.expected_bytes
                 || hex(&Sha256::digest(&active.bytes)) != active.digest
             {

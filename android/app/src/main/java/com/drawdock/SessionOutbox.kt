@@ -55,11 +55,12 @@ internal sealed interface SessionCommand {
         val objectId: Long = 0,
     ) : SessionCommand
 
-    data class Control(val type: String, override val sourceEpoch: Long = 0) : SessionCommand
+    data class Control(val type: String, override val sourceEpoch: Long = 0, val requestId: Long? = null) : SessionCommand
     data class Mode(val mode: String, val requestId: Long, override val sourceEpoch: Long = 0) : SessionCommand
     data class ClearDisplay(val requestId: Long, override val sourceEpoch: Long = 0) : SessionCommand
     data class SelectSource(val source: String, val requestId: Long, override val sourceEpoch: Long) : SessionCommand
     data class Editor(val json: String, override val sourceEpoch: Long) : SessionCommand
+    data class Restore(val json: String, val requestId: Long, override val sourceEpoch: Long) : SessionCommand
     data class Laser(
         val active: Boolean, val x: Float, val y: Float, val color: Int,
         override val sourceEpoch: Long,

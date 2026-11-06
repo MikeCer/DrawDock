@@ -76,6 +76,15 @@ class MainActivity : ComponentActivity() {
     private var pendingZoomRequestId: Long? = null
     private var zoomChanging = false
     private var queuedZoom: SharedViewport? = null
+    private val drawingRecovery by lazy { DrawingRecovery(filesDir) }
+    private var reconnectEnabled = false
+    private var foreground = false
+    private var retryAttempt = 0
+    private var retryTask: Runnable? = null
+    private var restoreNeeded = false
+    private var pendingRestoreRequestId: Long? = null
+    private var recoveryFailed = false
+    private var pendingRecovery: Pair<Long, String>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -136,7 +145,7 @@ class MainActivity : ComponentActivity() {
                 sessionClient?.videoTextureUpdated(texture.timestamp)
             }
             override fun onSurfaceTextureDestroyed(texture: SurfaceTexture): Boolean {
-                disconnectSession()
+                disconnectSession(keepRetry = reconnectEnabled)
                 videoSurface?.release()
                 videoSurface = null
                 return true
@@ -180,7 +189,7 @@ class MainActivity : ComponentActivity() {
         controls.addView(uiLabel("Connection", R.dimen.dd_ui_title))
         val topRow = row(controls)
         connectionButton = button("Connect", R.drawable.ic_dd_disconnected, primary = true) {
-            if (sessionClient == null) connectRememberedOrPair() else disconnectSession()
+            if (sessionClient == null && retryTask == null) connectRememberedOrPair() else disconnectSession()
         }.also(topRow::addView)
 
         statusText = uiLabel("Not connected; tablet preview alone is not PC annotation.")
@@ -240,13 +249,30 @@ class MainActivity : ComponentActivity() {
             }
         }
         configureInput()
+        try {
+            rememberedHostStore.load()?.let { saved ->
+                drawingRecovery.open(saved.fingerprint)
+                showSavedDrawing()
+            }
+        } catch (error: Exception) {
+            recoveryFailed = true
+            inputView.setInputReady(false)
+            notifyDrawing("Cannot load saved drawing: ${error.message}. No drawing was overwritten.")
+        }
         connectFromIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        foreground = true
+        if (reconnectEnabled && sessionClient == null) scheduleReconnect()
     }
 
     override fun onPause() {
         pendingConnection = null
         inputView.cancelActiveContact()
-        disconnectSession()
+        foreground = false
+        disconnectSession(keepRetry = reconnectEnabled)
         super.onPause()
     }
 
@@ -457,6 +483,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun history(redo: Boolean) {
+        if (inputView.showRecovery) {
+            notifyDrawing("Saved drawing is read-only until reconnection.")
+            return
+        }
         inputView.cancelActiveContact()
         inputView.selection = null
         if (sessionActive) {
@@ -469,7 +499,8 @@ class MainActivity : ComponentActivity() {
     private fun editorReady() =
         sessionActive && readyEpoch == sourceEpoch && !videoFailed && pendingSourceRequestId == null &&
             pendingEditorRequestId == null && pendingClearRequestId == null && pendingModeRequestId == null &&
-            pendingZoomRequestId == null && !zoomChanging
+            pendingZoomRequestId == null && !zoomChanging && !restoreNeeded &&
+            pendingRestoreRequestId == null && pendingRecovery == null && !recoveryFailed
 
     private fun sendEditor(message: JSONObject): Boolean {
         if (!editorReady()) { notifyDrawing("Connect and wait until the PC screen is ready."); return false }
@@ -480,8 +511,7 @@ class MainActivity : ComponentActivity() {
         refreshInputReady()
         workspace.postDelayed({
             if (sessionClient === client && pendingEditorRequestId == request) {
-                disconnectSession()
-                notifyDrawing("Drawing command was not acknowledged; reconnect required.")
+                failVideo("Drawing command was not acknowledged; restoring the saved drawing.")
             }
         }, 10_000)
         return true
@@ -504,6 +534,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun applyEditorEvent(response: JSONObject) {
+        val pending = pendingRecovery
+        if (pending != null && response.optLong("request_id", -1) == pending.first) {
+            if (response.optString("type") == "error") {
+                drawingRecovery.rollback(JSONObject(pending.second))
+                pendingRecovery = null
+                failVideo("PC rejected the drawing change: ${response.optString("message")}. Restoring the retained document.")
+                return
+            }
+            pendingRecovery = null
+        }
         if (response.optString("type") == "commit_ack") {
             inputView.acknowledgeInk(response.getLong("object_id"), response.getLong("source_epoch"),
                 response.getLong("revision"))
@@ -515,6 +555,11 @@ class MainActivity : ComponentActivity() {
         if (response.optLong("source_epoch", -1) != sourceEpoch) return
         val request = response.optLong("request_id", -1)
         if (response.optString("type") == "error") {
+            if (pendingRestoreRequestId == request) {
+                recoveryFailed = true
+                failVideo("PC rejected saved drawing restoration: ${response.optString("message")}. Saved file retained.")
+                return
+            }
             if (pendingZoomRequestId == request) {
                 failVideo("Shared zoom failed: ${response.optString("message")}. Reconnect required.")
                 return
@@ -662,10 +707,11 @@ class MainActivity : ComponentActivity() {
 
     private fun refreshInputReady() {
         inputView.setInputReady(
-            sessionClient == null || (sessionActive && readyEpoch == sourceEpoch && !videoFailed &&
+            !recoveryFailed && !inputView.showRecovery && (sessionClient == null || (sessionActive && readyEpoch == sourceEpoch && !videoFailed &&
                 pendingModeRequestId == null && pendingClearRequestId == null &&
                 pendingSourceRequestId == null && pendingEditorRequestId == null &&
-                pendingZoomRequestId == null && !zoomChanging),
+                pendingZoomRequestId == null && !zoomChanging && !restoreNeeded && pendingRestoreRequestId == null &&
+                pendingRecovery == null)),
         )
         inputView.navigationEnabled = sessionActive && sharedZoomSupported && !videoFailed
     }
@@ -692,6 +738,13 @@ class MainActivity : ComponentActivity() {
             inputView.cancelActiveContact()
             inputView.selection = null
         } else inputView.clear()
+        if (!zoomOnly) {
+            val output = selected.getJSONObject("source")
+            drawingRecovery.select(sourceName, output.getInt("right") - output.getInt("left"),
+                output.getInt("bottom") - output.getInt("top"))
+            restoreNeeded = true
+            showSavedDrawing()
+        }
         inputView.setInputReady(false)
         screenSelector.setSelection(sources.indexOfFirst { it.first == sourceName }.coerceAtLeast(0))
         screenSelector.isEnabled = false
@@ -700,9 +753,9 @@ class MainActivity : ComponentActivity() {
         workspace.postDelayed({
             if (generation == sessionGeneration && sessionClient != null &&
                 sourceEpoch == epoch && readyEpoch != epoch) {
-                failVideo("PC screen did not become ready within 10 seconds; reconnect required.")
+                failVideo("PC screen and saved drawing did not become ready within 120 seconds; retrying.")
             }
-        }, 10_000)
+        }, 120_000)
     }
 
     private fun requestModeChange() {
@@ -729,8 +782,7 @@ class MainActivity : ComponentActivity() {
         statusText.text = "Waiting for host to acknowledge $mode mode…"
         workspace.postDelayed({
             if (sessionClient === client && pendingModeRequestId == requestId) {
-                disconnectSession()
-                notifyDrawing("Mode change was not acknowledged; reconnect required.")
+                failVideo("Mode change was not acknowledged; restoring the saved drawing.")
             }
         }, 5_000)
     }
@@ -815,15 +867,22 @@ class MainActivity : ComponentActivity() {
             .showBranded()
     }
 
-    private fun connectRememberedOrPair() {
+    private fun connectRememberedOrPair(automatic: Boolean = false) {
         val saved = try {
             rememberedHostStore.load()
         } catch (error: Exception) {
+            reconnectEnabled = false
+            connectionButtonSafeText("Connect")
             statusText.text = "Cannot unlock remembered PC: ${error.message}. Use Forget PC to re-pair."
             return
         }
-        if (saved == null) showConnectionDialog()
-        else connectToHost(saved.host, saved.port, saved.fingerprint, saved.token, saved.deviceId)
+        if (saved == null) {
+            if (automatic) {
+                reconnectEnabled = false
+                connectionButtonSafeText("Connect")
+                statusText.text = "Automatic reconnect stopped: no remembered PC. Drawing retained; pair manually."
+            } else showConnectionDialog()
+        } else connectToHost(saved.host, saved.port, saved.fingerprint, saved.token, saved.deviceId)
     }
 
     private fun forgetRememberedHost() {
@@ -942,6 +1001,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectToHost(host: String, port: Int, fingerprint: String, token: String, deviceId: String? = null) {
+        if (recoveryFailed) {
+            notifyDrawing("Saved drawing could not be loaded. Connection is paused to protect it.")
+            return
+        }
+        try {
+            drawingRecovery.open(fingerprint.replace(":", "").replace(" ", "").lowercase())
+        } catch (error: Exception) {
+            recoveryFailed = true
+            notifyDrawing("Cannot load saved drawing: ${error.message}. Connection was not started.")
+            return
+        }
+        retryTask?.let { workspace.removeCallbacks(it) }
+        retryTask = null
+        reconnectEnabled = true
         val surface = videoSurface
         if (surface == null) {
             pendingConnection = { connectToHost(host, port, fingerprint, token, deviceId) }
@@ -955,7 +1028,7 @@ class MainActivity : ComponentActivity() {
             port,
             fingerprint,
             token,
-            onStatus = { message, connected ->
+            onStatus = { message, connected, retryable ->
                 if (generation == sessionGeneration) {
                     statusText.text = message
                     inputView.setConnectionStatus(
@@ -991,9 +1064,8 @@ class MainActivity : ComponentActivity() {
                         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                     }
                     if (!connected && !message.startsWith("Connecting")) {
-                        inputView.clearPendingInk()
-                        sessionClient = null
-                        connectionButtonSafeText("Connect")
+                        disconnectSession(keepRetry = retryable && reconnectEnabled)
+                        statusText.text = "$message. Drawing retained on this tablet."
                         toolsMenu.visibility = View.VISIBLE
                         menuButton.text = "Hide settings"
                         refreshInputReady()
@@ -1021,6 +1093,18 @@ class MainActivity : ComponentActivity() {
             },
             onEditorEvent = { response ->
                 if (generation == sessionGeneration) {
+                    if (response.optString("type") == "error" && !response.isNull("object_id") &&
+                        response.isNull("request_id")) {
+                        try {
+                            drawingRecovery.rejectObject(response.getLong("object_id"))
+                        } catch (error: Exception) {
+                            recoveryFailed = true
+                            failVideo("Cannot save rejected-object recovery: ${error.message}")
+                            return@SessionClient
+                        }
+                        failVideo("PC rejected the object: ${response.optString("message")}. Restoring the retained document.")
+                        return@SessionClient
+                    }
                     try {
                         applyEditorEvent(response)
                     } catch (error: org.json.JSONException) {
@@ -1028,12 +1112,16 @@ class MainActivity : ComponentActivity() {
                         notifyDrawing("Invalid PC drawing response; reconnect required.")
                     } catch (error: IllegalArgumentException) {
                         failVideo("Invalid PC ink acknowledgement; reconnect required.")
+                    } catch (error: java.io.IOException) {
+                        recoveryFailed = true
+                        failVideo("Cannot save drawing recovery: ${error.message}")
                     }
                 }
             },
             videoSurface = surface,
             onSources = { list, selected ->
                 if (generation == sessionGeneration) {
+                    drawingRecovery.objectBytes = selected.getInt("recovery_object_bytes")
                     sources = (0 until list.length()).map { index ->
                         val output = list.getJSONObject(index)
                         val name = output.getString("name")
@@ -1042,7 +1130,17 @@ class MainActivity : ComponentActivity() {
                         name to "$name ($width x $height)"
                     }
                     screenSelector.adapter = screenAdapter(sources.map { it.second })
-                    applySelectedSource(selected)
+                    val savedSource = drawingRecovery.source
+                    if (savedSource.isNotEmpty() && sources.none { it.first == savedSource }) {
+                        disconnectSession()
+                        notifyDrawing("Saved monitor $savedSource is unavailable. Drawing retained; restore on its original monitor.")
+                    } else {
+                        val current = selected.getJSONObject("source").getString("name")
+                        if (savedSource.isNotEmpty() && savedSource != current) {
+                            sourceEpoch = selected.getLong("source_epoch")
+                            pendingSourceRequestId = sessionClient?.selectSource(savedSource)
+                        } else applySelectedSource(selected)
+                    }
                     videoFailed = false
                 }
             },
@@ -1055,16 +1153,28 @@ class MainActivity : ComponentActivity() {
             },
             onSourceReady = { epoch ->
                 if (generation == sessionGeneration && epoch == sourceEpoch) {
-                    readyEpoch = epoch
-                    zoomChanging = false
-                    pendingReadyEpoch = null
-                    inputView.remoteVideoVisible = true
-                    screenSelector.isEnabled = true
-                    refreshInputReady()
-                    toolsMenu.visibility = View.GONE
-                    menuButton.text = "Settings"
-                    statusText.text = "Live $sourceName - ${videoWidth}x$videoHeight H.264 / included host ink"
-                    dispatchZoom()
+                    if (restoreNeeded) {
+                        restoreNeeded = false
+                        pendingRestoreRequestId = sessionClient?.restore(drawingRecovery.document.json())
+                        if (pendingRestoreRequestId == null) {
+                            failVideo("Saved drawing restoration could not be queued.")
+                        } else {
+                            statusText.text = "Restoring the saved drawing; editing is paused…"
+                        }
+                    } else if (pendingRestoreRequestId == null) {
+                        readyEpoch = epoch
+                        zoomChanging = false
+                        pendingReadyEpoch = null
+                        inputView.remoteVideoVisible = true
+                        screenSelector.isEnabled = true
+                        inputView.showRecovery = false
+                        retryAttempt = 0
+                        refreshInputReady()
+                        toolsMenu.visibility = View.GONE
+                        menuButton.text = "Settings"
+                        statusText.text = "Live $sourceName - ${videoWidth}x$videoHeight H.264 / included host ink"
+                        dispatchZoom()
+                    }
                 }
             },
             onVideoGeometry = { epoch, width, height ->
@@ -1078,7 +1188,7 @@ class MainActivity : ComponentActivity() {
                 val epoch = frame.epoch
                 if (generation == sessionGeneration && epoch == sourceEpoch) {
                     inputView.frameLatched(frame)
-                    videoTexture.alpha = 1f
+                    if (!restoreNeeded && pendingRestoreRequestId == null) videoTexture.alpha = 1f
                     if (pendingSourceRequestId == null && readyEpoch != epoch && pendingReadyEpoch != epoch) {
                         if (sessionClient?.sourceReady(epoch) == true) {
                             pendingReadyEpoch = epoch
@@ -1111,6 +1221,34 @@ class MainActivity : ComponentActivity() {
                     statusText.text = "Loading shared zoom ${(viewport.scale * 100).toInt()}%..."
                 }
             },
+            onRecoveryCommand = { command ->
+                try {
+                    check(pendingRecovery == null) { "Wait for the previous drawing change to be acknowledged" }
+                    val before = drawingRecovery.document.json().toString()
+                    drawingRecovery.record(command)
+                    if (command.has("request_id")) {
+                        pendingRecovery = command.getLong("request_id") to before
+                        refreshInputReady()
+                    }
+                    true
+                } catch (error: Exception) {
+                    recoveryFailed = true
+                    inputView.setInputReady(false)
+                    notifyDrawing("Drawing was not sent because saving failed: ${error.message}")
+                    false
+                }
+            },
+            onRestoreAck = { response ->
+                if (generation == sessionGeneration && response.getLong("request_id") == pendingRestoreRequestId) {
+                    pendingRestoreRequestId = null
+                    drawingRecovery.document.resetHistory()
+                    applySelectedSource(response.getJSONObject("selected"), zoomOnly = true)
+                    blackboard = drawingRecovery.document.canvas.getBoolean("blackboard")
+                    grid = drawingRecovery.document.canvas.getBoolean("grid")
+                    inputView.drawMode = true
+                    statusText.text = "Drawing restored; waiting for matching PC video…"
+                }
+            },
         )
         sessionClient = client
         inputView.setInputReady(false)
@@ -1125,8 +1263,17 @@ class MainActivity : ComponentActivity() {
             .setPositiveButton("Clear") { _, _ ->
                 val client = sessionClient
                 if (client == null) {
-                    inputView.clear()
-                    statusText.text = "Tablet cleared; no PC session is connected."
+                    try {
+                        if (drawingRecovery.source.isNotEmpty()) {
+                            drawingRecovery.record(JSONObject().put("type", "clear_display"))
+                        }
+                        inputView.clear()
+                        showSavedDrawing()
+                        statusText.text = "Saved tablet drawing cleared; no PC session is connected."
+                    } catch (error: Exception) {
+                        recoveryFailed = true
+                        notifyDrawing("Saved drawing was not cleared: ${error.message}")
+                    }
                     return@setPositiveButton
                 }
                 if (!editorReady()) {
@@ -1143,9 +1290,7 @@ class MainActivity : ComponentActivity() {
                     statusText.text = "Waiting for the PC to acknowledge Clear…"
                     inputView.postDelayed({
                         if (pendingClearRequestId == requestId && sessionClient === client) {
-                            pendingClearRequestId = null
-                            refreshInputReady()
-                            statusText.text = "Clear was not acknowledged; PC state is unknown."
+                            failVideo("Clear was not acknowledged; restoring the saved cleared drawing.")
                         }
                     }, 5_000)
                 }
@@ -1154,13 +1299,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun failVideo(message: String) {
-        disconnectSession()
+        disconnectSession(keepRetry = reconnectEnabled && !recoveryFailed)
         toolsMenu.visibility = View.VISIBLE
         menuButton.text = "Hide settings"
         notifyDrawing(message)
     }
 
-    private fun disconnectSession() {
+    private fun disconnectSession(keepRetry: Boolean = false) {
+        reconnectEnabled = keepRetry
+        retryTask?.let { workspace.removeCallbacks(it) }
+        retryTask = null
         sessionGeneration++
         inputViewOrNullCancel()
         sessionClient?.disconnect()
@@ -1170,6 +1318,9 @@ class MainActivity : ComponentActivity() {
         pendingReadyEpoch = null
         pendingSourceRequestId = null
         pendingEditorRequestId = null
+        pendingRecovery = null
+        pendingRestoreRequestId = null
+        restoreNeeded = false
         pendingZoomRequestId = null
         zoomChanging = false
         queuedZoom = null
@@ -1187,14 +1338,50 @@ class MainActivity : ComponentActivity() {
         if (::screenSelector.isInitialized) screenSelector.isEnabled = false
         inputView.remoteVideoVisible = false
         inputView.clearPendingInk()
+        showSavedDrawing()
         pendingModeRequestId = null
         pendingClearRequestId = null
         connectionButtonSafeText("Connect")
         if (::statusText.isInitialized) {
-            statusText.text = "Disconnected; tablet preview alone is not PC annotation."
-            inputView.setConnectionStatus("LOCAL PREVIEW ONLY - no host session")
+            statusText.text = "Disconnected. Saved drawings are retained; editing is paused."
+            inputView.setConnectionStatus("SAVED DRAWING - disconnected; editing paused")
         }
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        refreshInputReady()
+        if (keepRetry && foreground) scheduleReconnect()
+    }
+
+    private fun showSavedDrawing() {
+        try {
+            inputView.setRecovery(drawingRecovery.document.json())
+        } catch (error: Exception) {
+            recoveryFailed = true
+            reconnectEnabled = false
+            inputView.setInputReady(false)
+            notifyDrawing("Cannot display saved drawing: ${error.message}. Saved file was not overwritten.")
+            return
+        }
+        inputView.showRecovery = drawingRecovery.source.isNotEmpty()
+        if (inputView.showRecovery) {
+            videoWidth = drawingRecovery.width
+            videoHeight = drawingRecovery.height
+            inputView.setInputReady(false)
+            if (::workspace.isInitialized) fitWorkspace()
+        }
+    }
+
+    private fun scheduleReconnect() {
+        if (!foreground || !reconnectEnabled || recoveryFailed || retryTask != null) return
+        val delay = minOf(30_000L, 1_000L shl retryAttempt.coerceAtMost(5))
+        retryAttempt++
+        connectionButtonSafeText("Stop retrying")
+        statusText.text = "Drawing retained. Retrying the same authenticated endpoint in ${delay / 1000}s…"
+        val task = Runnable {
+            retryTask = null
+            if (foreground && reconnectEnabled && sessionClient == null) connectRememberedOrPair(automatic = true)
+        }
+        retryTask = task
+        workspace.postDelayed(task, delay)
     }
 
     private fun connectionButtonSafeText(text: String) {

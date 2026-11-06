@@ -10,6 +10,7 @@ import android.view.PointerIcon
 import android.view.View
 import android.view.ViewConfiguration
 import android.os.SystemClock
+import org.json.JSONObject
 import kotlin.math.max
 import kotlin.math.hypot
 
@@ -44,6 +45,62 @@ class InkInputView(context: Context) : View(context) {
     private val marks = mutableListOf<InkMark>()
     private val redoMarks = mutableListOf<InkMark>()
     private val pendingInk = PendingInk()
+    private var recoveryObjects = emptyList<Pair<InkMark, android.graphics.Matrix>>()
+    private val recoveryImages = mutableMapOf<String, Bitmap>()
+    private var recoveryCanvas = false to false
+    var showRecovery = false
+        set(value) { field = value; invalidate() }
+
+    fun setRecovery(document: JSONObject) {
+        recoveryImages.values.forEach { it.recycle() }
+        recoveryImages.clear()
+        val objects = document.getJSONArray("objects")
+        val imageData = (0 until objects.length()).mapNotNull { index ->
+            objects.getJSONObject(index).let { value ->
+                value.optString("image_data").takeIf { !value.isNull("image_data") && it.isNotEmpty() }
+            }
+        }.distinct()
+        val imageBudget = 16 * 1024 * 1024 / maxOf(1, imageData.size)
+        for (data in imageData) {
+            val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            require(bounds.outWidth in 1..1280 && bounds.outHeight in 1..1280) {
+                "Saved image dimensions are invalid"
+            }
+            var sample = 1
+            while (((bounds.outWidth + sample - 1) / sample).toLong() *
+                ((bounds.outHeight + sample - 1) / sample) * 4 > imageBudget) sample *= 2
+            val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            recoveryImages[data] = requireNotNull(
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options),
+            ) { "Saved image cannot be decoded" }
+        }
+        recoveryObjects = (0 until objects.length()).map { index ->
+            val value = objects.getJSONObject(index)
+            val style = value.getJSONObject("style")
+            val rgba = style.getJSONArray("rgba")
+            val points = value.getJSONArray("points")
+            val mark = InkMark(DrawTool.valueOf(value.getString("tool").uppercase()),
+                android.graphics.Color.argb(rgba.getInt(3), rgba.getInt(0), rgba.getInt(1), rgba.getInt(2)),
+                style.getDouble("width").toFloat(),
+                (0 until points.length()).map {
+                    val point = points.getJSONObject(it)
+                    point.getDouble("x").toFloat() to point.getDouble("y").toFloat()
+                }, value.optString("text").takeIf { !value.isNull("text") },
+                value.optString("image_data").takeIf { !value.isNull("image_data") })
+            val transform = value.optJSONObject("transform")
+            val matrix = android.graphics.Matrix()
+            if (transform != null) matrix.setValues(floatArrayOf(
+                transform.getDouble("a").toFloat(), transform.getDouble("c").toFloat(), transform.getDouble("tx").toFloat(),
+                transform.getDouble("b").toFloat(), transform.getDouble("d").toFloat(), transform.getDouble("ty").toFloat(),
+                0f, 0f, 1f))
+            mark to matrix
+        }
+        val canvas = document.getJSONObject("canvas")
+        recoveryCanvas = canvas.getBoolean("blackboard") to canvas.getBoolean("grid")
+        invalidate()
+    }
     private var displayedViewport = SharedViewport()
     var sourceEpoch = 0L
     var onHandoffTimeout: (() -> Unit)? = null
@@ -619,8 +676,26 @@ class InkInputView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (!remoteVideoVisible) for (mark in marks) drawMark(canvas, mark)
-        if (remoteVideoVisible) {
+        if (showRecovery && width > 0 && height > 0) {
+            canvas.drawColor(android.graphics.Color.BLACK)
+            if (recoveryCanvas.second) {
+                paint.color = 0xFF444444.toInt()
+                paint.strokeWidth = 1f
+                for (x in 0..width step 32) canvas.drawLine(x.toFloat(), 0f, x.toFloat(), height.toFloat(), paint)
+                for (y in 0..height step 32) canvas.drawLine(0f, y.toFloat(), width.toFloat(), y.toFloat(), paint)
+            }
+            for ((mark, normalizedMatrix) in recoveryObjects) {
+                canvas.save()
+                canvas.scale(width.toFloat(), height.toFloat())
+                canvas.concat(normalizedMatrix)
+                canvas.scale(1f / width, 1f / height)
+                drawMark(canvas, mark.copy(width = mark.width * minOf(width, height),
+                    points = mark.points.map { it.first * width to it.second * height }))
+                canvas.restore()
+            }
+        }
+        if (!remoteVideoVisible && !showRecovery) for (mark in marks) drawMark(canvas, mark)
+        if (remoteVideoVisible && !showRecovery) {
             val view = displayedViewport
             for (mark in pendingInk.marks) {
                 drawMark(canvas, mark.copy(width = mark.width * minOf(width, height) * view.scale,
@@ -639,7 +714,7 @@ class InkInputView(context: Context) : View(context) {
             drawMark(canvas, InkMark(latchedTool, latchedColor, latchedWidth, shapePoints(activePoints)))
         }
         if (width > 0 && height > 0) selection?.let { drawSelection(canvas, selectionFrame(it)) }
-        if (remoteVideoVisible) return
+        if (remoteVideoVisible && !showRecovery) return
         paint.style = Paint.Style.FILL
         paint.color = 0x99000000.toInt()
         canvas.drawRect(0f, 0f, width.toFloat(), 44f, paint)
@@ -769,7 +844,15 @@ class InkInputView(context: Context) : View(context) {
                     canvas.drawText(line, first.first, first.second + mark.width * (1 + index * 1.25f), paint)
                 }
             }
-            DrawTool.IMAGE, DrawTool.LASER, DrawTool.SELECT_MOVE, DrawTool.ROTATE, DrawTool.RESIZE -> Unit
+            DrawTool.IMAGE -> {
+                mark.imageData?.let { data ->
+                    val bitmap = requireNotNull(recoveryImages[data]) { "Saved image preview is missing" }
+                    val end = mark.points.last()
+                    canvas.drawBitmap(bitmap, null, android.graphics.RectF(first.first, first.second,
+                        end.first, end.second), null)
+                }
+            }
+            DrawTool.LASER, DrawTool.SELECT_MOVE, DrawTool.ROTATE, DrawTool.RESIZE -> Unit
         }
     }
 

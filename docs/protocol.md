@@ -40,12 +40,17 @@ clients must use the geometry actually supplied by the host.
     "zoom":{"scale":1,"left":0,"top":0}
   },
   "shared_zoom":true,
+  "drawing_recovery":true,
+  "recovery_object_bytes":128,
   "video_token":"<fresh 32-hex session video token>",
   "remembered_device":{"id":"<device ID>","token":"<reconnect credential>"}
 }
 ```
 
 `remembered_device` is supplied on enrollment and is `null` on resume.
+`drawing_recovery` is required by recovery-capable Android clients.
+`recovery_object_bytes` is the host's actual `size_of::<InkObject>()` for matching
+local scene/history accounting; the example value is not a protocol constant.
 Source bounds are physical Windows virtual-desktop coordinates; negative origins
 are valid. Initial mode is Draw. Trust persists independently of scene/session
 state. See [pairing and threat model](pairing-and-threat-model.md).
@@ -178,6 +183,38 @@ the same `commit_ack` as a direct commit.
 The host decoded-chunk bound is 48 KiB, but JSON/base64 overhead must still fit
 the frame limit. Android sends **36 KiB raw chunks**, producing 48 KiB of base64
 plus JSON overhead.
+
+## Drawing recovery
+
+After pinned authentication and `source_ready`, restore a saved document using
+the existing ordered chunk framing:
+
+| Command | Fields in addition to `source_epoch` |
+|---|---|
+| `begin_restore` | `request_id`, `total_bytes`, `digest` (SHA-256 of exact document JSON) |
+| `restore_chunk` | `request_id`, zero-based byte `offset`, base64 `data` |
+| `finish_restore` | `request_id` |
+
+The document is `{"objects":[...],"canvas":{"blackboard":false,"grid":false}}`.
+Only one commit/restore transaction may exist. Recovery is bounded to 16 MiB
+and 120 seconds; chunk/frame limits remain unchanged. Transaction identity,
+ordered offsets, exact length, digest and ordinary scene validation must all
+pass before replacing objects/canvas atomically. Commit and restore chunks
+cannot be mixed. Mutations are suspended during restoration; heartbeat remains
+allowed. Disconnect cancels any partial transaction.
+
+Success returns `{"type":"restore_ack","request_id":8,"selected":{...}}`.
+The selected metadata has a new source epoch and reset zoom. Restore forces
+Draw mode, clears transient state and starts new undo/redo history. Input stays
+suspended until video for the new epoch is acknowledged with `source_ready`.
+Errors retain the tablet snapshot; host rejection stops automatic recovery.
+The client saves intended object/canvas changes before enqueueing, removes
+explicitly rejected commits and rolls back rejected correlated edits.
+
+Tablet storage has a 32 MiB aggregate per-host limit; each monitor retains the
+ordinary 2,000-object, 200,000-point and 8 MiB estimated scene limits. Storage
+failures are surfaced and prevent sending the mutation. Unfinished contacts,
+laser, zoom and selection are not persisted.
 
 ## Editing and canvas
 

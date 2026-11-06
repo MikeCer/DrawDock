@@ -1,6 +1,61 @@
 use super::*;
 
 #[test]
+fn recovery_chunks_are_bounded_ordered_and_cannot_be_finished_as_commits() {
+    let scene = Arc::new(Mutex::new(Scene::demo()));
+    let mut input = test_input();
+    let mut transaction = None;
+    let bytes =
+        serde_json::to_vec(&json!({"objects": [], "canvas": {"blackboard":false,"grid":false}}))
+            .unwrap();
+    let begin = json!({"type":"begin_restore","request_id":8,"total_bytes":bytes.len(),
+        "digest":hex(&Sha256::digest(&bytes))});
+    process_command(&begin, &scene, &mut input, &mut transaction).unwrap();
+    assert!(transaction.as_ref().unwrap().restoring);
+    assert!(
+        process_command(
+            &json!({"type":"commit_chunk","object_id":8,"offset":0,
+        "data":STANDARD.encode(&bytes)}),
+            &scene,
+            &mut input,
+            &mut transaction
+        )
+        .is_err()
+    );
+    assert!(transaction.is_none());
+    process_command(&begin, &scene, &mut input, &mut transaction).unwrap();
+    process_command(
+        &json!({"type":"restore_chunk","request_id":8,"offset":0,
+        "data":STANDARD.encode(&bytes)}),
+        &scene,
+        &mut input,
+        &mut transaction,
+    )
+    .unwrap();
+    assert!(
+        process_command(
+            &json!({"type":"finish_commit","object_id":8}),
+            &scene,
+            &mut input,
+            &mut transaction
+        )
+        .is_err()
+    );
+    assert_eq!(scene.lock().unwrap().objects().len(), 4);
+    assert!(require_ready("begin_restore", false).is_err());
+    assert!(
+        process_command(
+            &json!({"type":"begin_restore","request_id":8,"total_bytes":16*1024*1024+1,
+        "digest":hex(&Sha256::digest(&bytes))}),
+            &scene,
+            &mut input,
+            &mut transaction
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn commit_acknowledges_the_object_and_content_revision_but_rejection_never_does() {
     let scene = Arc::new(Mutex::new(Scene::default()));
     let mut input = test_input();

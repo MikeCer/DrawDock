@@ -682,7 +682,7 @@ impl Ui {
                 return Err("Selected listener is not enabled".into());
             }
             if self.active.as_deref() == Some(&endpoint.to_string())
-                && !self.confirm_stop("Disabling this listener disconnects the tablet and clears its current session drawings. Continue?")
+                && !self.confirm_stop("Disabling this listener disconnects the tablet and clears the PC overlay. Saved tablet drawings are not deleted. Continue?")
             { return Ok(()); }
             self.set(STATUS, &format!("Disabling {endpoint}..."));
             self.submit(Request::Disable(endpoint), true)
@@ -696,7 +696,7 @@ impl Ui {
                 unsafe { ShowWindow(self.window, SW_HIDE); }
             }
             QUIT => {
-                if self.confirm_stop("Quit DrawDock? This stops owned listeners, disconnects the tablet and clears its session drawings.") {
+                if self.confirm_stop("Quit DrawDock? This stops owned listeners, disconnects the tablet and clears the PC overlay. Saved tablet drawings are not deleted.") {
                     self.submit(Request::Quit, true)?;
                     self.quitting = true;
                     self.set(STATUS, "Stopping owned host and cleaning up USB forwarding...");
@@ -710,7 +710,7 @@ impl Ui {
                 self.submit(Request::Pair(endpoint), true)?;
             }
             STOP => {
-                if self.confirm_stop("Stop all owned listeners? The tablet disconnects and current session drawings are cleared.") {
+                if self.confirm_stop("Stop all owned listeners? The tablet disconnects and the PC overlay is cleared. Saved tablet drawings are not deleted.") {
                     self.submit(Request::Stop, true)?;
                     self.set(STATUS, "Stopping all owned listeners...");
                 }

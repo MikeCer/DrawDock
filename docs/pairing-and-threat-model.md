@@ -86,6 +86,15 @@ blackboard disallows mouse injection into the concealed desktop.
 Source epochs reject queued input for outdated geometry.
 See [protocol limits](protocol.md#resource-limits).
 
+Recovery snapshots contain drawing content (including text and PNGs), not
+credentials, in private Android app storage. They are scoped by the verified
+host certificate fingerprint and monitor, not by transport/IP. Recovery uses
+the same pinned TLS and remembered credential checks; it never enrolls a new
+device automatically, changes a pin or selects a different missing monitor.
+Authentication failures stop retries. Corrupt/incompatible snapshots are kept
+and reported rather than silently replaced. There is no cloud backup or export;
+Android uninstall/app-data clearing deletes this local content.
+
 ## Content and local automation
 
 Text is plain text escaped before generated SVG rendering. The renderer does

@@ -106,12 +106,18 @@ connection controls or Pen tools as a menu fallback. See [Features](features.md)
 for shape completion, text, transforms, laser/highlighter, blackboard/grid,
 clipboard image paste and Clear.
 
-Backgrounding the app ends the session and clears its host annotations/history.
-Copy a clipboard image before connecting, or reconnect after copying. If video
-fails, the session ends and the app reports reconnection is required. A selected
-screen must render and acknowledge readiness within 10 seconds, otherwise the
-session ends explicitly instead of remaining on Loading. The monitor selector
-is disabled until the current screen is ready.
+Completed drawings are saved privately on the tablet before sending them.
+Backgrounding ends the connection and clears the PC overlay, not the saved
+document; retries resume when you return. Transport/video failures show the
+saved drawing read-only and retry the same pinned endpoint automatically.
+Explicit Disconnect/Stop retrying stops retries while retaining the document.
+The Windows launcher restores its selected USB tablet's ADB tunnel after cable
+reconnect. With a command-line host, rerun your explicit `adb reverse` command
+if the tunnel disappeared; tablet retries cannot create a Windows ADB mapping.
+After restarting either app, start the host and tap Connect on the tablet.
+Recovery waits up to 120 seconds for the screen and saved document to become
+ready; the monitor selector and editing remain disabled until matching video
+arrives. See [recovery and its limits](features.md#clear-history-and-lifecycle).
 
 ## Optional ADB invitation delivery
 
@@ -161,7 +167,7 @@ delivery. Do not publish its contents.
 | Host requests new pairing | Invitation/revocation state and saved endpoint; reopen enrollment deliberately |
 | Pin mismatch or protected-store error | Correct PC identity/permissions; never disable pinning or silently reset trust |
 | Video unavailable/input suspended | FFmpeg/encoder output, decoder capabilities and source geometry; reconnect |
-| App disconnects while copying an image | Background lifecycle ends the session; copy first, then connect |
+| App disconnects while copying an image | Backgrounding pauses the connection; return to resume authenticated recovery of completed objects |
 | Clipboard paste rejects content | Copy an image URI, not a link/text; check provider access and image limits |
 | Menu hold ignored | Use stylus contact inside the image, avoid moving beyond slop and unlock the device |
 

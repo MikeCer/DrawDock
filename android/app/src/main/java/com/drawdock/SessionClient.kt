@@ -29,7 +29,7 @@ class SessionClient(
     private val port: Int,
     private val fingerprint: String,
     private val invitationToken: String,
-    private val onStatus: (String, Boolean) -> Unit,
+    private val onStatus: (String, Boolean, Boolean) -> Unit,
     private val onModeAck: (String, Long) -> Unit,
     private val onClearAck: (Long) -> Unit,
     private val onEditorEvent: (JSONObject) -> Unit,
@@ -44,6 +44,8 @@ class SessionClient(
     private val onRemembered: (String, String) -> Unit,
     private val onZoomSelected: (JSONObject, Long) -> Unit,
     private val onZoomCapability: (Boolean) -> Unit,
+    private val onRecoveryCommand: (JSONObject) -> Boolean,
+    private val onRestoreAck: (JSONObject) -> Unit,
 ) {
     var viewport = SharedViewport()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -106,6 +108,9 @@ class SessionClient(
                 require(response.optInt("version") == 2) {
                     "Host protocol is incompatible; rebuild and restart the host"
                 }
+                require(response.optBoolean("drawing_recovery")) {
+                    "PC host does not support drawing recovery; update the host before reconnecting"
+                }
                 synchronized(credentialLock) {
                     if (closed.get()) return@thread
                     val credential = response.optJSONObject("remembered_device")
@@ -122,6 +127,7 @@ class SessionClient(
                 val selected = response.getJSONObject("selected")
                 mainHandler.post { onZoomCapability(response.optBoolean("shared_zoom")) }
                 sourceEpoch = selected.getLong("source_epoch")
+                selected.put("recovery_object_bytes", response.getInt("recovery_object_bytes"))
                 mainHandler.post { onSources(sources, selected) }
                 output = streamOut
                 postStatus("Connected (TLS certificate pinned)", true)
@@ -148,8 +154,13 @@ class SessionClient(
                         videoDecoder = decoder
                         decoder.run(BufferedInputStream(video.inputStream))
                     } catch (error: Exception) {
-                        if (!closed.get()) mainHandler.post {
-                            onVideoError(error.message ?: "Video connection ended")
+                        if (!closed.get()) {
+                            if (error is javax.net.ssl.SSLHandshakeException || error is SecurityException) {
+                                close()
+                                postStatus("Video authentication failed: ${error.message}", false, false)
+                            } else mainHandler.post {
+                                onVideoError(error.message ?: "Video connection ended")
+                            }
                         }
                     } finally {
                         try { videoSocket?.close() } catch (_: IOException) {
@@ -159,7 +170,8 @@ class SessionClient(
                 }
             } catch (error: Exception) {
                 close()
-                postStatus("Connection failed: ${error.message ?: error.javaClass.simpleName}", false)
+                postStatus("Connection failed: ${error.message ?: error.javaClass.simpleName}", false,
+                    error is IOException && error !is javax.net.ssl.SSLHandshakeException)
             }
         }
     }
@@ -186,8 +198,8 @@ class SessionClient(
         return id
     }
 
-    fun undo() = enqueue(SessionCommand.Control("undo", sourceEpoch))
-    fun redo() = enqueue(SessionCommand.Control("redo", sourceEpoch))
+    fun undo() = enqueue(SessionCommand.Control("undo", sourceEpoch, nextEditorRequestId.incrementAndGet()))
+    fun redo() = enqueue(SessionCommand.Control("redo", sourceEpoch, nextEditorRequestId.incrementAndGet()))
     fun sourceReady(epoch: Long) = enqueue(SessionCommand.Control("source_ready", epoch))
     fun editor(message: JSONObject): Long? {
         val requestId = nextEditorRequestId.incrementAndGet()
@@ -198,6 +210,16 @@ class SessionClient(
     fun zoom(view: SharedViewport): Long? = editor(JSONObject().put("type", "set_zoom")
         .put("zoom", JSONObject().put("scale", view.scale.toDouble())
             .put("left", view.left.toDouble()).put("top", view.top.toDouble())))
+
+    fun restore(document: JSONObject): Long? {
+        val objects = document.getJSONArray("objects")
+        val highest = (0 until objects.length()).maxOfOrNull { objects.getJSONObject(it).getLong("id") } ?: 0
+        nextObjectId.updateAndGet { maxOf(it, highest) }
+        val requestId = nextEditorRequestId.incrementAndGet()
+        return requestId.takeIf {
+            enqueue(SessionCommand.Restore(document.toString(), requestId, sourceEpoch))
+        }
+    }
 
     fun sendLaser(active: Boolean, x: Float, y: Float, color: Int, width: Int, height: Int): Boolean {
         if (width <= 0 || height <= 0) return false
@@ -268,8 +290,19 @@ class SessionClient(
 
     private fun enqueue(command: SessionCommand): Boolean {
         if (closed.get()) return false
+        val recovery = when (command) {
+            is SessionCommand.Commit -> JSONObject().put("type", "commit").put("object", commitObject(command))
+            is SessionCommand.Control -> if (command.type in listOf("undo", "redo"))
+                JSONObject().put("type", command.type).put("request_id", command.requestId) else null
+            is SessionCommand.Editor -> JSONObject(command.json).takeIf {
+                it.optString("type") in listOf("transform_object", "set_canvas")
+            }
+            is SessionCommand.ClearDisplay -> JSONObject().put("type", "clear_display").put("request_id", command.requestId)
+            else -> null
+        }
+        if (recovery != null && !onRecoveryCommand(recovery)) return false
         if (!commands.offer(command)) {
-            postStatus("Session queue full; command was not sent", socket != null)
+            postStatus("Session queue full; saved drawing will be restored on reconnect", false, true)
             return false
         }
         return true
@@ -298,7 +331,7 @@ class SessionClient(
                 }
             } catch (error: Exception) {
                 if (!closed.get()) {
-                    postStatus("Session write failed: ${error.message ?: "I/O error"}", false)
+                    postStatus("Session write failed: ${error.message ?: "I/O error"}", false, true)
                 }
                 close()
                 return
@@ -362,6 +395,11 @@ class SessionClient(
                         val requestId = response.getLong("request_id")
                         mainHandler.post { onZoomSelected(selected, requestId) }
                     }
+                    "restore_ack" -> {
+                        val selected = response.getJSONObject("selected")
+                        sourceEpoch = selected.getLong("source_epoch")
+                        mainHandler.post { onRestoreAck(response) }
+                    }
                     "source_ready_ack" -> {
                         val epoch = response.getLong("source_epoch")
                         mainHandler.post { onSourceReady(epoch); onEditorEvent(response) }
@@ -370,7 +408,8 @@ class SessionClient(
             }
         } catch (error: Exception) {
             if (!closed.get()) {
-                postStatus("Host session ended: ${error.message ?: "connection closed"}", false)
+                postStatus("Host session ended: ${error.message ?: "connection closed"}", false,
+                    error is IOException || error is IllegalStateException)
             }
             close()
         }
@@ -397,8 +436,8 @@ class SessionClient(
         }
     }
 
-    private fun postStatus(message: String, connected: Boolean) {
-        mainHandler.post { onStatus(message, connected) }
+    private fun postStatus(message: String, connected: Boolean, retryable: Boolean = false) {
+        mainHandler.post { onStatus(message, connected, retryable) }
     }
 
     private fun writeFrame(output: BufferedOutputStream, message: JSONObject) {
@@ -410,7 +449,7 @@ class SessionClient(
     }
 
     private fun encodeCommand(command: SessionCommand): List<JSONObject> = when (command) {
-        is SessionCommand.Control -> listOf(JSONObject().put("type", command.type))
+        is SessionCommand.Control -> listOf(JSONObject().put("type", command.type).put("request_id", command.requestId))
         is SessionCommand.Editor -> listOf(JSONObject(command.json))
         is SessionCommand.Laser -> listOf(JSONObject().put("type", "laser")
             .put("active", command.active).put("x", command.x.toDouble()).put("y", command.y.toDouble())
@@ -442,10 +481,28 @@ class SessionClient(
                 .put("button", command.button),
         )
         is SessionCommand.Commit -> encodeCommit(command)
+        is SessionCommand.Restore -> {
+            val bytes = command.json.toByteArray(Charsets.UTF_8)
+            require(bytes.size <= 16 * 1024 * 1024) { "Recovery document exceeds the transfer limit" }
+            val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+                .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            buildList {
+                add(JSONObject().put("type", "begin_restore").put("request_id", command.requestId)
+                    .put("total_bytes", bytes.size).put("digest", digest))
+                var offset = 0
+                while (offset < bytes.size) {
+                    val end = minOf(offset + MAX_COMMIT_CHUNK_BYTES, bytes.size)
+                    add(JSONObject().put("type", "restore_chunk").put("request_id", command.requestId)
+                        .put("offset", offset).put("data", android.util.Base64.encodeToString(
+                            bytes.copyOfRange(offset, end), android.util.Base64.NO_WRAP)))
+                    offset = end
+                }
+                add(JSONObject().put("type", "finish_restore").put("request_id", command.requestId))
+            }
+        }
     }
 
-    private fun encodeCommit(command: SessionCommand.Commit): List<JSONObject> {
-        val id = command.objectId
+    private fun commitObject(command: SessionCommand.Commit): JSONObject {
         val points = JSONArray()
         command.mark.commitPoints().forEach { (x, y) ->
             points.put(
@@ -460,7 +517,7 @@ class SessionClient(
             .put(android.graphics.Color.blue(command.mark.color))
             .put(android.graphics.Color.alpha(command.mark.color))
         val objectValue = JSONObject()
-            .put("id", id)
+            .put("id", command.objectId)
             .put("tool", command.mark.tool.name.lowercase())
             .put(
                 "style",
@@ -473,8 +530,15 @@ class SessionClient(
                     ),
             )
             .put("points", points)
+            .put("transform", JSONObject().put("a", 1).put("b", 0).put("c", 0).put("d", 1).put("tx", 0).put("ty", 0))
             .put("text", command.mark.text)
             .put("image_data", command.mark.imageData)
+        return objectValue
+    }
+
+    private fun encodeCommit(command: SessionCommand.Commit): List<JSONObject> {
+        val id = command.objectId
+        val objectValue = commitObject(command)
         val objectBytes = objectValue.toString().toByteArray(Charsets.UTF_8)
         if (objectBytes.size < MAX_FRAME_BYTES) {
             return listOf(JSONObject().put("type", "commit").put("object", objectValue))

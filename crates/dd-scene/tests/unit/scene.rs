@@ -1,5 +1,39 @@
 use super::*;
 
+#[test]
+fn recovery_restores_objects_and_canvas_atomically_without_old_history_or_laser() {
+    let mut scene = Scene::demo();
+    scene.clear().unwrap();
+    scene
+        .set_laser(true, Point { x: 0.5, y: 0.5 }, [255, 0, 0, 255])
+        .unwrap();
+    let revision = scene.revision();
+    let objects = vec![stroke(17, 0.2), shape(Tool::Rectangle)];
+    let canvas = Canvas {
+        blackboard: true,
+        grid: true,
+    };
+    scene.restore(objects.clone(), canvas).unwrap();
+    assert_eq!(scene.objects(), objects);
+    assert_eq!(scene.canvas(), canvas);
+    assert!(scene.revision() > revision);
+    assert!(scene.laser().is_none());
+    assert!(!scene.undo());
+    let before = scene.clone();
+    assert!(
+        scene
+            .restore(vec![stroke(1, 0.2), stroke(1, 0.3)], Canvas::default())
+            .is_err()
+    );
+    assert_eq!(scene, before);
+    assert!(
+        scene
+            .restore(vec![stroke(2, f32::NAN)], Canvas::default())
+            .is_err()
+    );
+    assert_eq!(scene, before);
+}
+
 fn stroke(id: u64, x: f32) -> InkObject {
     InkObject {
         id,

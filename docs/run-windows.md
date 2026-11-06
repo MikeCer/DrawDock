@@ -76,8 +76,14 @@ keeps the window visible and reports an error instead of hiding an unreachable U
 **Stop all** stops the owned host and unlocks configuration, even if its last
 listener was already disabled. **Quit** also exits the launcher.
 Disabling the endpoint serving a tablet ends that session and clears its
-drawings; the launcher warns before intentionally ending an active session.
+PC overlay; the launcher warns before intentionally ending an active session.
+Recovery-capable Android clients retain their saved document and can restore
+it when the listener returns. Stop retries on the tablet to finish deliberately.
 Disabling an unrelated endpoint does not interrupt the active session.
+While USB is enabled, the launcher checks its selected authorized tablet every
+two seconds and recreates a missing ADB reverse tunnel after cable reconnect.
+It never substitutes another tablet or replaces a conflicting forwarding rule;
+authorization/mapping errors are reported in the logs.
 
 The log viewer retains the latest 500 lines with timestamps and source/severity,
 truncates oversized lines and masks pairing/private-key material.

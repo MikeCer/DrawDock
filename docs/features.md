@@ -163,12 +163,29 @@ Undo/redo cover annotations, text/images, affine edits and canvas flags.
 Clear is a single undoable operation that removes objects and resets both
 Blackboard and Grid. It cancels active input and waits for the PC's correlated
 acknowledgement before clearing the tablet preview. A timeout reports unknown
-PC state rather than success. Disconnected Clear affects local preview only.
+PC state rather than success. Disconnected Clear explicitly deletes the saved
+local drawing; it does not contact the PC.
 
-Scenes/history are separate per monitor for one connection. Backgrounding the
-Android app ends its session and clears host scene/history; drawings are not
-stored as persistent documents. Copy a clipboard image before connecting, or
-reconnect after copying.
+Completed objects, text/images, affine transforms and Blackboard/Grid are
+saved atomically in the tablet's private app storage before transmission,
+separately per host certificate fingerprint and monitor. Disconnecting clears
+the PC overlay for safety but leaves a read-only saved drawing on the tablet.
+USB and Wi-Fi use the same authenticated recovery path: foreground retries
+back off from 1 to 30 seconds, then restore the saved document after video
+readiness. Editing resumes only after matching restored PC video.
+
+Backgrounding ends the connection and pauses retries until resume. Explicit
+Disconnect/Stop retrying retains the document without retrying; after an app
+restart, tap Connect. A missing monitor, invalid document or authentication
+failure stops recovery with an error rather than changing trust or restoring
+to another output. Update both apps; older hosts are rejected.
+
+Recovery and monitor selection start a new undo/redo history. Laser, selection,
+zoom and unfinished contacts are not saved; recovery starts in Draw at 100%.
+Image previews may be downsampled while disconnected, without changing saved
+PNG data. Saves are synchronous before transmission, so large drawings may
+briefly delay input. There is no export; uninstalling the Android app or clearing
+its app data deletes its saved drawings.
 
 Committed host ink is included in video, so Android suppresses independently
 rendered committed objects. Provisional ink ends on lift and can briefly

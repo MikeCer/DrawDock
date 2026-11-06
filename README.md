@@ -207,8 +207,12 @@ Use **Pen tools** to try shapes, colors or the laser pointer.
 > monitor/projector.** Marks visible only on the tablet are not a successful
 > end-to-end test.
 
-Keep the Android app open during your session. Disconnecting or backgrounding
-it clears the session drawings; there is no save/export yet.
+Completed objects and Blackboard/Grid settings are saved privately on the
+tablet before transmission. If USB or Wi-Fi drops, the saved drawing stays
+visible with editing paused; DrawDock retries the same authenticated endpoint
+and restores it to its original monitor. Backgrounding pauses retries until
+you return. **Disconnect / Stop retrying** retains the drawing and stops retries;
+after restarting the app, tap **Connect** to recover it.
 
 | After the first test | What to do |
 |---|---|
@@ -279,7 +283,7 @@ Linux adapters and QUIC remain **deferred**.
 
 | Area | Important boundary |
 |---|---|
-| **Session lifetime** | Disconnecting or backgrounding Android ends the session and clears its drawings/history; there is no document save/export |
+| **Drawing recovery** | Update both apps for recovery support. Completed objects survive connection/app/host restarts, but restored undo/redo history, laser, selection and zoom do not. Unfinished contacts are cancelled. No export yet; uninstalling Android or clearing its app data removes saved drawings |
 | **Concurrency** | One active tablet session; Android remembers one PC endpoint rather than a multi-host/transport list |
 | **Desktop restrictions** | Secure desktop, UAC, protected content and exclusive fullscreen paths are not bypassed; elevated apps cannot be controlled by automatic elevation |
 | **Input and editing** | Uniform stroke widths, not pressure-sensitive rendering; no eraser, per-object deletion or multi-object selection |
